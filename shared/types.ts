@@ -146,7 +146,12 @@ export type Settings = {
   myNick: string;
   /** переключаться на экран «я против него» автоматически */
   autoSwitch: boolean;
+  /** при запуске подтягивать обновления базы с GitHub */
+  autoBaseUpdate: boolean;
 };
+
+export type BaseUpdateResult = { ok: boolean; checkedAt: string; updated: string[]; error?: string; remoteDate?: string };
+export type AppRelease = { current: string; latest: string | null; url: string; newer: boolean };
 
 /** Сведения о базовых данных: для какой версии игры они актуальны */
 export type AppMeta = { gameVersion: string; dataUpdated: string; note?: string };
@@ -187,6 +192,10 @@ export interface TekkenApi {
   openDataFolder(): Promise<void>;
   visionSources(kinds?: VisionSource['kind'][]): Promise<VisionSource[]>;
   makePortable(): Promise<{ folder: string; sameAsBefore: boolean }>;
+  checkBaseUpdate(): Promise<BaseUpdateResult>;
+  lastBaseUpdate(): Promise<BaseUpdateResult | null>;
+  onBaseUpdated?(cb: (r: BaseUpdateResult) => void): () => void;
+  checkAppRelease(): Promise<AppRelease>;
   getMatchup(oppId: string): Promise<MatchupCustom | null>;
   /** null — вернуть автоматический список */
   saveMatchup(oppId: string, m: MatchupCustom | null): Promise<MatchupCustom | null>;

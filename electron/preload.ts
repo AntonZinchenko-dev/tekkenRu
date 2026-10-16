@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { JobState, TekkenApi } from '../shared/types';
+import type { BaseUpdateResult, JobState, TekkenApi } from '../shared/types';
 
 const api: TekkenApi = {
   getCharacters: () => ipcRenderer.invoke('getCharacters'),
@@ -29,6 +29,14 @@ const api: TekkenApi = {
   visionSources: (kinds) => ipcRenderer.invoke('visionSources', kinds),
   makePortable: () => ipcRenderer.invoke('makePortable'),
   getMeta: () => ipcRenderer.invoke('getMeta'),
+  checkBaseUpdate: () => ipcRenderer.invoke('checkBaseUpdate'),
+  lastBaseUpdate: () => ipcRenderer.invoke('lastBaseUpdate'),
+  onBaseUpdated: (cb) => {
+    const h = (_e: unknown, r: BaseUpdateResult) => cb(r);
+    ipcRenderer.on('base-updated', h);
+    return () => ipcRenderer.removeListener('base-updated', h);
+  },
+  checkAppRelease: () => ipcRenderer.invoke('checkAppRelease'),
   getMatchup: (id) => ipcRenderer.invoke('getMatchup', id),
   saveMatchup: (id, m) => ipcRenderer.invoke('saveMatchup', id, m),
   getUserCombos: (id) => ipcRenderer.invoke('getUserCombos', id),

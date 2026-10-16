@@ -2,6 +2,7 @@
 import { packager } from '@electron/packager';
 import { cpSync, mkdirSync, writeFileSync, existsSync, readdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { setIcon } from './set-icon.mjs';
 
 const keep = [/^\/dist(\/|$)/, /^\/dist-electron(\/|$)/, /^\/package\.json$/];
@@ -39,6 +40,9 @@ setIcon(path.join(outDir, 'TekkenRU.exe'), 'build/king.ico');
 mkdirSync(path.join(outDir, 'data'), { recursive: true });
 writeFileSync(path.join(outDir, '.env.example'), 'TRANSLATE_API_KEY=ваш-ключ\n');
 // постоянные данные (персонажи, переводы, версия игры) — лежат рядом с программой, их можно править руками
-if (existsSync('base')) cpSync('base', path.join(outDir, 'base'), { recursive: true });
+if (existsSync('base')) {
+  execFileSync(process.execPath, ['scripts/make-manifest.mjs'], { stdio: 'inherit' }); // опись для автообновления
+  cpSync('base', path.join(outDir, 'base'), { recursive: true });
+}
 if (existsSync('ПРОЧТИ.txt')) cpSync('ПРОЧТИ.txt', path.join(outDir, 'ПРОЧТИ.txt'));
 console.log('Готово:', outDir);

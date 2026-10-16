@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AppMeta, CharacterData, CharacterInfo, JobState, Move, Section, Settings, SourceKind, TabId, VisionSource } from '../shared/types';
+import type { AppMeta, AppRelease, BaseUpdateResult, CharacterData, CharacterInfo, JobState, Move, Section, Settings, SourceKind, TabId, VisionSource } from '../shared/types';
 import { APP_AUTHOR, APP_YEAR, MODELS, TAB_TITLES } from '../shared/types';
 import { api } from './api';
 import { CharContext, buildMoveIndex, type CharCtx } from './context';
@@ -40,6 +40,8 @@ export function App() {
   const [tab, setTab] = useState<Tab>((ls.get('tab') as Tab) || 'overview');
   const [settings, setSettings] = useState<Settings | null>(null);
   const [meta, setMeta] = useState<AppMeta | null>(null);
+  const [notice, setNotice] = useState<{ text: string; url?: string } | null>(null);
+  const [release, setRelease] = useState<AppRelease | null>(null);
   const [job, setJob] = useState<JobState | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [compact, setCompact] = useState(ls.get('compact') === '1');
@@ -63,6 +65,14 @@ export function App() {
     reloadChars();
     api.getSettings().then(setSettings);
     api.getMeta?.().then(setMeta).catch(() => setMeta(null));
+    // новая версия программы в Releases на GitHub
+    api
+      .checkAppRelease?.()
+      .then((r) => {
+        setRelease(r);
+        if (r.newer) setNotice({ text: `Вышла новая версия программы ${r.latest} — нажми, чтобы скачать`, url: r.url });
+      })
+      .catch(() => {});
     api.getJob().then(setJob);
     const off1 = api.onJob((s) => {
       setJob(s);
@@ -70,6 +80,21 @@ export function App() {
     });
     return off1;
   }, [reloadChars]);
+
+  // база обновилась с GitHub — перечитываем список и версию игры, показываем уведомление
+  useEffect(() => {
+    const off = api.onBaseUpdated?.((r: BaseUpdateResult) => {
+      reloadChars();
+      api.getMeta().then(setMeta).catch(() => {});
+      setNotice({ text: `База обновлена с GitHub: ${filesWord(r.updated.length)}` });
+    });
+    return () => off?.();
+  }, [reloadChars]);
+  useEffect(() => {
+    if (!notice || notice.url) return;
+    const t = setTimeout(() => setNotice(null), 8000);
+    return () => clearTimeout(t);
+  }, [notice]);
 
   useEffect(() => {
     if (!current && chars.length) setCurrent(chars[0].id);
@@ -382,11 +407,26 @@ export function App() {
             visionDebug={visionDebug}
             onSave={saveSettings}
             meta={meta}
+            release={release}
             onSaveMeta={async (patch) => setMeta(await api.saveMeta(patch))}
             onClose={() => setShowSettings(false)}
           />
         )}
         {job && (job.running || job.log.length > 0) && <JobBar job={job} />}
+        {notice && (
+          <div className="toast" role="status">
+            {notice.url ? (
+              <a href={notice.url} target="_blank" rel="noreferrer" onClick={() => setNotice(null)}>
+                {notice.text}
+              </a>
+            ) : (
+              <span>{notice.text}</span>
+            )}
+            <button className="toast-x" onClick={() => setNotice(null)} title="Закрыть">
+              ×
+            </button>
+          </div>
+        )}
       </div>
     </CharContext.Provider>
   );
@@ -567,6 +607,7 @@ function SettingsDialog({
   visionDebug,
   onSave,
   meta,
+  release,
   onSaveMeta,
   onClose,
 }: {
@@ -578,6 +619,7 @@ function SettingsDialog({
   visionDebug: VisionDebug | null;
   onSave: (p: Partial<Settings> & { apiKey?: string }) => void;
   meta: AppMeta | null;
+  release: AppRelease | null;
   onSaveMeta: (p: Partial<AppMeta>) => Promise<void>;
   onClose: () => void;
 }) {
@@ -588,6 +630,11 @@ function SettingsDialog({
   const [thumbMode, setThumbModeState] = useState<ThumbMode>(getThumbMode());
   const [ver, setVer] = useState(meta?.gameVersion ?? '');
   const [verSaved, setVerSaved] = useState(false);
+  const [bu, setBu] = useState<BaseUpdateResult | null>(null);
+  const [buBusy, setBuBusy] = useState(false);
+  useEffect(() => {
+    if (window.tekken) api.lastBaseUpdate().then(setBu).catch(() => {});
+  }, []);
   useEffect(() => {
     if (window.tekken) api.visionSources().then(setSources).catch(() => setSources([]));
   }, []);
@@ -761,13 +808,58 @@ function SettingsDialog({
 
         <h4>О программе</h4>
         <p className="small">
-          <b>TekkenRU</b> — русский справочник по Tekken 8.
+          <b>TekkenRU</b> — русский справочник по Tekken 8. Версия {release?.current ?? '—'}
+          {release?.newer ? (
+            <>
+              {' '}
+              · <a href={release.url}>есть новая {release.latest} — скачать</a>
+            </>
+          ) : release?.latest ? (
+            <> · это последняя версия</>
+          ) : null}
+          .
           <br />© {APP_YEAR} {APP_AUTHOR}. Все права защищены.
         </p>
         <p className="small muted">
           Данные о приёмах и гайды: tekkendocs.com, rbnorway.org и wavu.wiki (CC BY-SA), авторы гайдов указаны на страницах персонажей. Tekken — товарный знак
           Bandai Namco; программа с ними не связана.
         </p>
+
+        <h4>Обновление базы с GitHub</h4>
+        <p className="small muted">
+          Когда выходит патч, база (персонажи, переводы, цепочки, версия игры) обновляется на GitHub, и программа сама подтягивает изменённые файлы. Твои
+          настройки, свои комбо и свои списки соперников не трогаются.
+        </p>
+        <label className="check">
+          <input type="checkbox" checked={settings.autoBaseUpdate} onChange={(e) => onSave({ autoBaseUpdate: e.target.checked })} /> Проверять обновления базы
+          при запуске
+        </label>
+        <div className="row wrap">
+          <button
+            className="btn"
+            disabled={buBusy}
+            onClick={async () => {
+              setBuBusy(true);
+              try {
+                setBu(await api.checkBaseUpdate());
+              } finally {
+                setBuBusy(false);
+              }
+            }}
+          >
+            {buBusy ? 'Проверяю…' : 'Проверить сейчас'}
+          </button>
+          {bu && (
+            <span className={`small ${bu.ok ? 'ok' : 'bad'}`}>
+              {bu.ok
+                ? bu.updated.length
+                  ? `Обновлено: ${filesWord(bu.updated.length)}`
+                  : 'База актуальна'
+                : `Не получилось: ${bu.error}`}{' '}
+              <span className="muted">({new Date(bu.checkedAt).toLocaleString('ru-RU')})</span>
+            </span>
+          )}
+        </div>
 
         <h4>Данные</h4>
         <div className="row wrap">
@@ -851,4 +943,11 @@ function JobBar({ job }: { job: JobState }) {
       )}
     </div>
   );
+}
+
+function filesWord(n: number) {
+  const m10 = n % 10;
+  const m100 = n % 100;
+  const w = m10 === 1 && m100 !== 11 ? 'файл' : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? 'файла' : 'файлов';
+  return `${n} ${w}`;
 }

@@ -13,10 +13,14 @@ const time = (s?: string) => (s ? Date.parse(s) || 0 : 0);
  * Для каждого раздела персонажа берётся более свежая версия.
  */
 export class Store {
+  /** слой обновлений базы, скачанных с GitHub: перекрывает папку base рядом с программой */
+  public updDir: string;
   constructor(
     public dir: string,
     public baseDir?: string,
-  ) {}
+  ) {
+    this.updDir = path.join(dir, 'base-update');
+  }
 
   async init() {
     await fs.mkdir(path.join(this.dir, 'characters'), { recursive: true });
@@ -30,8 +34,10 @@ export class Store {
     }
   }
 
-  private readBase<T>(file: string) {
-    return this.baseDir ? this.readJson<T>(file, this.baseDir) : Promise.resolve(null);
+  private async readBase<T>(file: string) {
+    const fresh = await this.readJson<T>(file, this.updDir);
+    if (fresh) return fresh;
+    return this.baseDir ? this.readJson<T>(file, this.baseDir) : null;
   }
 
   async getMeta(): Promise<AppMeta> {
@@ -39,10 +45,12 @@ export class Store {
   }
 
   async saveMeta(patch: Partial<AppMeta>) {
-    if (!this.baseDir) return this.getMeta();
     const meta = { ...(await this.getMeta()), ...patch };
-    await fs.mkdir(this.baseDir, { recursive: true });
-    await fs.writeFile(path.join(this.baseDir, 'meta.json'), JSON.stringify(meta, null, 2), 'utf8');
+    // пишем туда, откуда версия сейчас и берётся (слой обновлений или папка base)
+    const upd = path.join(this.updDir, 'meta.json');
+    const target = (await this.readJson('meta.json', this.updDir)) || !this.baseDir ? upd : path.join(this.baseDir, 'meta.json');
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, JSON.stringify(meta, null, 2), 'utf8');
     return meta;
   }
 

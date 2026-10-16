@@ -2,10 +2,11 @@ import { app, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, net, prot
 import { existsSync, readFileSync } from 'node:fs';
 import { cp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { JobState, Settings, VisionSource } from '../shared/types';
+import type { JobState, Settings, VisionSource, BaseUpdateResult } from '../shared/types';
 import { MODELS } from '../shared/types';
 import { UpdateJob } from './pipeline/job';
 import { Store } from './pipeline/store';
+import { checkAppRelease, updateBase } from './pipeline/baseUpdate';
 import { Translator } from './pipeline/translate';
 
 app.setName('TekkenRU');
@@ -41,6 +42,7 @@ type RawSettings = {
   myMain?: string;
   myNick?: string;
   autoSwitch?: boolean;
+  autoBaseUpdate?: boolean;
 };
 
 const FRAMES_VERSION = 2; // 2 — во фреймдате есть ссылки на видео
@@ -87,6 +89,7 @@ function settings(): Settings {
     myMain: raw.myMain ?? '',
     myNick: raw.myNick ?? '',
     autoSwitch: raw.autoSwitch ?? true,
+    autoBaseUpdate: raw.autoBaseUpdate ?? true,
   };
 }
 
@@ -232,6 +235,27 @@ async function visionSources(kinds: VisionSource['kind'][] = ['window', 'screen'
   return out;
 }
 
+let lastBaseUpdate: BaseUpdateResult | null = null;
+let baseUpdateRunning: Promise<BaseUpdateResult> | null = null;
+/** Сверить базу с GitHub и докачать изменённое; открытым экранам сказать, что данные обновились */
+function runBaseUpdate(): Promise<BaseUpdateResult> {
+  if (baseUpdateRunning) return baseUpdateRunning;
+  baseUpdateRunning = updateBase((u) => net.fetch(u, { headers: { 'User-Agent': 'TekkenRU' } }), baseDir, store.updDir)
+    .then((r) => {
+      lastBaseUpdate = r;
+      if (r.updated.length) {
+        for (const f of r.updated) {
+          const m = f.match(/^(?:characters|flows)\/([a-z0-9-]+)\.json$/);
+          if (m) win?.webContents.send('character-updated', m[1]);
+        }
+        win?.webContents.send('base-updated', r);
+      }
+      return r;
+    })
+    .finally(() => (baseUpdateRunning = null));
+  return baseUpdateRunning;
+}
+
 app.whenReady().then(async () => {
   await store.init();
   raw = (await store.getSettingsRaw()) as RawSettings;
@@ -267,6 +291,7 @@ app.whenReady().then(async () => {
     if (patch.myMain !== undefined) raw.myMain = patch.myMain;
     if (patch.myNick !== undefined) raw.myNick = patch.myNick.trim();
     if (patch.autoSwitch !== undefined) raw.autoSwitch = patch.autoSwitch;
+    if (patch.autoBaseUpdate !== undefined) raw.autoBaseUpdate = patch.autoBaseUpdate;
     await persist();
     return settings();
   });
@@ -283,6 +308,10 @@ app.whenReady().then(async () => {
     visionSources(Array.isArray(kinds) && kinds.every((k) => k === 'window' || k === 'screen') && kinds.length ? kinds : undefined),
   );
   ipcMain.handle('getMeta', () => store.getMeta());
+  // ---- обновление базы и проверка новой версии программы (GitHub) ----
+  ipcMain.handle('checkBaseUpdate', () => runBaseUpdate());
+  ipcMain.handle('lastBaseUpdate', () => lastBaseUpdate);
+  ipcMain.handle('checkAppRelease', () => checkAppRelease((u) => net.fetch(u, { headers: { 'User-Agent': 'TekkenRU' } }), app.getVersion()));
   ipcMain.handle('getMatchup', (_e, id: string) => store.getMatchup(String(id)));
   ipcMain.handle('saveMatchup', (_e, id: string, m: unknown) =>
     store.saveMatchup(String(id), m && typeof m === 'object' && Array.isArray((m as { items?: unknown }).items) ? (m as never) : null),
@@ -302,6 +331,11 @@ app.whenReady().then(async () => {
   });
 
   createWindow();
+
+  // база с GitHub: тихо проверяем через несколько секунд после запуска
+  if (raw.autoBaseUpdate ?? true) {
+    win?.webContents.once('did-finish-load', () => setTimeout(() => void runBaseUpdate(), 4000));
+  }
 
   // Num − работает из любого окна (в том числе из игры): «проверь соперника заново»
   try {

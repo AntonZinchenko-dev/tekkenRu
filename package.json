@@ -12,7 +12,8 @@
     "start": "npm run build && electron .",
     "pack:win": "npm run build && node scripts/pack-win.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "manifest": "node scripts/make-manifest.mjs"
   },
   "author": "Зинченко Антон Васильевич",
   "license": "UNLICENSED",

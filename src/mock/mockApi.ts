@@ -57,7 +57,7 @@ const lili: CharacterData = {
   },
 };
 
-const settings: Settings = { apiKeySet: false, apiKeySource: 'none', model: 'claude-haiku-5-5', alwaysOnTop: false, zoom: 1, concurrency: 3, visionEnabled: false, visionSource: 'auto', myMain: 'lili', myNick: '', autoSwitch: true };
+const settings: Settings = { apiKeySet: false, apiKeySource: 'none', model: 'claude-haiku-5-5', alwaysOnTop: false, zoom: 1, concurrency: 3, visionEnabled: false, visionSource: 'auto', myMain: 'lili', myNick: '', autoSwitch: true, autoBaseUpdate: true };
 const job: JobState = { running: true, total: 168, done: 47, current: ['Lili: гайд', 'Jin: шпаргалка'], log: [{ time: '15:40:02', level: 'info', text: 'Персонажей: 42' }], usage: { input: 410000, output: 120000, costUsd: 0.1 } };
 
 export const mockApi: TekkenApi = {
@@ -89,6 +89,9 @@ export const mockApi: TekkenApi = {
   openDataFolder: async () => {},
   visionSources: async () => [],
   makePortable: async () => ({ folder: '', sameAsBefore: false }),
+  checkBaseUpdate: async () => ({ ok: true, checkedAt: new Date().toISOString(), updated: [] }),
+  lastBaseUpdate: async () => null,
+  checkAppRelease: async () => ({ current: '1.0.0', latest: '1.0.0', url: 'https://github.com/AntonZinchenko-dev/tekkenRu/releases', newer: false }),
   getMatchup: async (id) => JSON.parse(localStorage.getItem('mock-mu-' + id) || 'null'),
   saveMatchup: async (id, m) => (m && m.items.length ? localStorage.setItem('mock-mu-' + id, JSON.stringify(m)) : localStorage.removeItem('mock-mu-' + id), m),
   getUserCombos: async (id) => JSON.parse(localStorage.getItem('mock-combos-' + id) || '[]'),
