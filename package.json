@@ -1,0 +1,42 @@
+{
+  "name": "tekken-ru",
+  "productName": "TekkenRU",
+  "version": "1.0.0",
+  "description": "TekkenRU — русский справочник по персонажам Tekken 8",
+  "private": true,
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "build:main": "node scripts/build-main.mjs",
+    "build:renderer": "vite build",
+    "build": "npm run build:main && npm run build:renderer",
+    "start": "npm run build && electron .",
+    "pack:win": "npm run build && node scripts/pack-win.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "author": "Зинченко Антон Васильевич",
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "@anthropic-ai/sdk": "^0.132.1",
+    "@electron/packager": "^20.3.0",
+    "@types/node": "^26.6.4",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/turndown": "^5.0.6",
+    "@vitejs/plugin-react": "^6.1.2",
+    "cheerio": "^1.2.0",
+    "electron": "^44.7.0",
+    "esbuild": "^0.28.2",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "resedit": "^3.1.0",
+    "turndown": "^7.2.4",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.3"
+  },
+  "dependencies": {
+    "tesseract.js": "^6.0.1"
+  },
+  "copyright": "© 2026 Зинченко Антон Васильевич"
+}

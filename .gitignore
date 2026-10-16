@@ -1,0 +1,30 @@
+# зависимости
+node_modules/
+
+# сборка
+dist/
+dist-electron/
+release/
+*.tsbuildinfo
+
+# ключи и локальные настройки
+.env
+.env.*
+!.env.example
+
+# данные пользователя (если программа запускалась из папки проекта)
+data/
+debug/
+
+# логи и временные файлы
+*.log
+npm-debug.log*
+*.tmp
+*.bak
+
+# система и редакторы
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
