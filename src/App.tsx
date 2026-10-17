@@ -11,10 +11,18 @@ import { startVision, type VisionDebug, type VisionHandle } from './vision/visio
 import { Legend } from './views/Legend';
 import { FlowsView } from './views/FlowsView';
 import { MyCombos } from './combo/MyCombos';
+import { ViewMenu } from './components/ViewMenu';
 
 type Tab = TabId | 'flows' | 'frames' | 'legend';
 const TABS: Tab[] = ['overview', 'combos', 'moves', 'tactics', 'flows', 'counter', 'cheatsheet', 'frames', 'legend'];
 const tabTitle = (t: Tab) => (t === 'legend' ? 'Нотация' : t === 'flows' ? 'Цепочки' : TAB_TITLES[t]);
+
+/** Фокус в поле ввода — горячие клавиши не перехватываем (иначе буквы в описании переключают экраны) */
+const isTyping = (t: EventTarget | null) => {
+  const el = t as HTMLElement | null;
+  if (!el) return false;
+  return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable;
+};
 
 const ls = {
   get: (k: string) => {
@@ -53,7 +61,7 @@ export function App() {
   const [mode, setMode] = useState<'char' | 'versus'>(ls.get('mode') === 'versus' ? 'versus' : 'char');
   const [vsMe, setVsMe] = useState<string | null>(ls.get('vsMe'));
   const [vsOpp, setVsOpp] = useState<string | null>(ls.get('vsOpp'));
-  const [vision, setVision] = useState<VisionStatus>({ on: false, text: 'Автоопределение выключено — включи в ⚙, если хочешь, чтобы соперник подставлялся сам.' });
+  const [vision, setVision] = useState<VisionStatus>({ on: false, text: 'Автоопределение выключено. Включи переключатель сверху — соперник будет подставляться сам.' });
   const [visionDebug, setVisionDebug] = useState<VisionDebug | null>(null);
   useEffect(() => ls.set('mode', mode), [mode]);
   useEffect(() => ls.set('vsMe', vsMe ?? ''), [vsMe]);
@@ -117,7 +125,7 @@ export function App() {
   const forcePending = useRef(false);
   useEffect(() => {
     if (!settings?.visionEnabled || !window.tekken) {
-      setVision({ on: false, text: 'Автоопределение выключено — включи в ⚙, если хочешь, чтобы соперник подставлялся сам.' });
+      setVision({ on: false, text: 'Автоопределение выключено. Включи переключатель сверху — соперник будет подставляться сам.' });
       return;
     }
     setVision({ on: true, text: 'Запускаю автоопределение…' });
@@ -169,7 +177,7 @@ export function App() {
     };
     const off = api.onVisionForce?.(force);
     const onKey = (e: KeyboardEvent) => {
-      if (e.code === 'NumpadSubtract') force();
+      if (e.code === 'NumpadSubtract' && !isTyping(e.target)) force();
     };
     window.addEventListener('keydown', onKey);
     return () => {
@@ -202,7 +210,7 @@ export function App() {
   // горячие клавиши
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const typing = (e.target as HTMLElement)?.tagName === 'INPUT' || (e.target as HTMLElement)?.tagName === 'SELECT';
+      const typing = isTyping(e.target);
       if (e.ctrlKey && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setCompact(false);
@@ -248,7 +256,7 @@ export function App() {
 
   return (
     <CharContext.Provider value={ctx}>
-      <div className={`app${compact ? ' compact' : ''}`}>
+      <div className={`app${compact ? ' compact' : ''}${mode === 'versus' ? ' mode-vs' : ''}`}>
         {!compact && (
           <aside className="side">
             <div className="brand">
@@ -281,6 +289,7 @@ export function App() {
                 >
                   <Avatar id={c.id} remote={c.avatar} />
                   <span>{c.displayName}</span>
+                  {mode === 'versus' && c.id === vsMe && <span className="char-me">ты</span>}
                 </button>
               ))}
             </nav>
@@ -308,7 +317,7 @@ export function App() {
                 </select>
               )}
               {mode === 'versus' ? (
-                <h1 className="vs-h1">⚔ Я против него</h1>
+                <h1 className="vs-h1">Матчап</h1>
               ) : (
                 !compact &&
                 info && (
@@ -320,39 +329,46 @@ export function App() {
               )}
             </div>
             <div className="top-actions">
+              {!empty && (
+                <div className="seg mode-seg" role="tablist" title="Переключить экран (V)">
+                  <button role="tab" aria-selected={mode === 'char'} className={mode === 'char' ? 'on' : ''} onClick={() => setMode('char')}>
+                    Персонаж
+                  </button>
+                  <button role="tab" aria-selected={mode === 'versus'} className={mode === 'versus' ? 'on vs' : ''} onClick={() => setMode('versus')}>
+                    ⚔ Матчап
+                  </button>
+                </div>
+              )}
+              {mode === 'versus' && settings && window.tekken && (
+                <button
+                  className={`auto-toggle${settings.visionEnabled ? ' on' : ''}${vision.ok ? ' ok' : ''}`}
+                  role="switch"
+                  aria-checked={settings.visionEnabled}
+                  title={settings.visionEnabled ? `${vision.text}\nНажми, чтобы выключить` : 'Программа сама узнаёт соперника по экрану игры (проверяет раз в секунду)'}
+                  onClick={() => saveSettings({ visionEnabled: !settings.visionEnabled })}
+                >
+                  <span className={`switch${settings.visionEnabled ? ' on' : ''}`} />
+                  Автоопределение
+                </button>
+              )}
+              <span className="top-sep" />
               {compact && meta?.gameVersion && (
                 <span className="game-ver-badge" title="Версия игры, для которой актуальны данные. Поменять — в ⚙.">
                   T8 {meta.gameVersion}
                 </span>
               )}
-              <button
-                className={`icon-btn vs-mode-btn${mode === 'versus' ? ' on' : ''}`}
-                title="Экран «я против него» (V)"
-                onClick={() => setMode((m) => (m === 'versus' ? 'char' : 'versus'))}
-              >
-                ⚔ {mode === 'versus' ? 'к гайдам' : 'против'}
-              </button>
-              <button className="icon-btn" title="Свернуть боковую панель (B)" onClick={() => setCompact((c) => !c)}>
-                {compact ? '☰' : '⇤'}
-              </button>
-              <button
-                className={`icon-btn${settings?.alwaysOnTop ? ' on' : ''}`}
-                title="Поверх всех окон"
-                onClick={() => settings && saveSettings({ alwaysOnTop: !settings.alwaysOnTop })}
-              >
-                📌
-              </button>
-              <button className={`icon-btn${btnDigits ? ' on' : ''}`} title="Кнопки: точки ⇄ цифры" onClick={() => setBtnDigits((v) => !v)}>
-                {btnDigits ? '1+2' : '⁘'}
-              </button>
-              <button className="icon-btn" title="Мельче (Ctrl −)" onClick={() => settings && saveSettings({ zoom: +(settings.zoom - 0.1).toFixed(2) })}>
-                A−
-              </button>
-              <button className="icon-btn" title="Крупнее (Ctrl +)" onClick={() => settings && saveSettings({ zoom: +(settings.zoom + 0.1).toFixed(2) })}>
-                A+
-              </button>
-              <button className="icon-btn" title="Настройки и обновление базы" onClick={() => setShowSettings(true)}>
-                ⚙
+              <ViewMenu
+                compact={compact}
+                onToggleCompact={() => setCompact((c) => !c)}
+                onTop={Boolean(settings?.alwaysOnTop)}
+                onToggleTop={() => settings && saveSettings({ alwaysOnTop: !settings.alwaysOnTop })}
+                btnDigits={btnDigits}
+                setBtnDigits={setBtnDigits}
+                zoom={settings?.zoom ?? 1}
+                setZoom={(zoom) => settings && saveSettings({ zoom })}
+              />
+              <button className="btn small" title="Настройки и обновление базы" onClick={() => setShowSettings(true)}>
+                ⚙ Настройки
               </button>
             </div>
           </header>
@@ -633,12 +649,18 @@ function SettingsDialog({
   const [bu, setBu] = useState<BaseUpdateResult | null>(null);
   const [buBusy, setBuBusy] = useState(false);
   useEffect(() => {
-    if (window.tekken) api.lastBaseUpdate().then(setBu).catch(() => {});
+    // старая сборка программы этих функций не знает — тогда просто молчим
+    if (window.tekken && typeof api.lastBaseUpdate === 'function') api.lastBaseUpdate().then(setBu).catch(() => {});
   }, []);
   useEffect(() => {
     if (window.tekken) api.visionSources().then(setSources).catch(() => setSources([]));
   }, []);
   const running = Boolean(job?.running);
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', k);
+    return () => window.removeEventListener('keydown', k);
+  }, [onClose]);
   return (
     <div className="modal-bg" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -705,7 +727,7 @@ function SettingsDialog({
         <h4>Автоопределение соперника</h4>
         <p className="small muted">
           Программа смотрит на окно игры так же, как Discord при показе экрана, и читает имена персонажей на плашках у полосок здоровья. В саму игру не
-          лезет и кнопки не нажимает. Как только начинается бой — сама открывает экран «я против него».
+          лезет и кнопки не нажимает. Как только начинается бой — сама открывает экран «Матчап».
         </p>
         <label className="check">
           <input type="checkbox" checked={settings.visionEnabled} onChange={(e) => onSave({ visionEnabled: e.target.checked })} /> Включить автоопределение
@@ -743,8 +765,8 @@ function SettingsDialog({
           </div>
         </label>
         <label className="check">
-          <input type="checkbox" checked={settings.autoSwitch} onChange={(e) => onSave({ autoSwitch: e.target.checked })} /> Сам переключаться на экран «я против
-          него» в начале боя
+          <input type="checkbox" checked={settings.autoSwitch} onChange={(e) => onSave({ autoSwitch: e.target.checked })} /> Сам переключаться на экран «Матчап» в начале
+          боя
         </label>
         <p className={`small ${vision.ok ? 'ok' : 'muted'}`}>Статус: {vision.text}</p>
         {visionDebug && (
@@ -775,7 +797,7 @@ function SettingsDialog({
           <input type="checkbox" checked={settings.alwaysOnTop} onChange={(e) => onSave({ alwaysOnTop: e.target.checked })} /> Поверх всех окон
         </label>
         <label className="field">
-          <span>Видео-миниатюры на экране «против»</span>
+          <span>Видео-миниатюры на экране «Матчап»</span>
           <select className="input" value={thumbMode} onChange={(e) => (setThumbMode(e.target.value as ThumbMode), setThumbModeState(e.target.value as ThumbMode))}>
             <option value="all">Крутятся все сразу, всегда</option>
             <option value="queue">По очереди — меньше нагрузка на компьютер</option>
@@ -841,7 +863,13 @@ function SettingsDialog({
             onClick={async () => {
               setBuBusy(true);
               try {
-                setBu(await api.checkBaseUpdate());
+                setBu(
+                  typeof api.checkBaseUpdate === 'function'
+                    ? await api.checkBaseUpdate()
+                    : { ok: false, checkedAt: new Date().toISOString(), updated: [], error: 'эта сборка программы не умеет обновлять базу — нужна полная пересборка (npm run pack:win)' },
+                );
+              } catch (e) {
+                setBu({ ok: false, checkedAt: new Date().toISOString(), updated: [], error: (e as Error).message });
               } finally {
                 setBuBusy(false);
               }
@@ -890,7 +918,7 @@ function SettingsDialog({
         )}
         {portable === 'error' && <p className="small bad">Не получилось скопировать. Проверь, что на диске есть место.</p>}
         <p className="muted small">
-          Горячие клавиши: <b>Num −</b> узнать соперника заново (работает и из игры), <b>V</b> экран «я против него», <b>1–9</b> вкладки, <b>B</b> скрыть список персонажей, <b>Ctrl+K</b> поиск персонажа, <b>Ctrl ±</b> масштаб.
+          Горячие клавиши: <b>Num −</b> узнать соперника заново (работает и из игры), <b>V</b> экран «Матчап», <b>1–9</b> вкладки, <b>B</b> скрыть список персонажей, <b>Ctrl+K</b> поиск персонажа, <b>Ctrl ±</b> масштаб.
         </p>
       </div>
     </div>

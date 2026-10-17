@@ -3,10 +3,10 @@ import type { CharacterData, CharacterInfo, MatchupCustom, MatchupItem, Move } f
 import { api } from '../api';
 import { CharContext, buildMoveIndex, type CharCtx } from '../context';
 import { FrameStrip, RichText } from '../components/Content';
-import { VideoThumb } from '../components/MoveVideo';
+import { VideoThumb, videoUrl } from '../components/MoveVideo';
 import { Notation } from '../notation/Notation';
-import { dangerFromItem, dangers, guideFor, myPunishers, specials, type Danger } from './matchup';
-import { MovePicker } from '../components/MovePicker';
+import { BREAK_NOTE, BREAK_TITLE, dangerFromItem, dangers, guideFor, myPunishers, specials, throwsOf, type Danger, type ThrowBreak, type ThrowSet } from './matchup';
+import { MovePicker, thrClass } from '../components/MovePicker';
 
 export type VisionStatus = { on: boolean; text: string; ok?: boolean };
 
@@ -59,6 +59,24 @@ export function VersusView(p: Props) {
   const oppCtx = useMemo(() => makeCtx(opp, p.showFrames, p.btnDigits), [opp, p.showFrames, p.btnDigits]);
   const punishers = useMemo(() => myPunishers(me), [me]);
   const sp = useMemo(() => specials(opp), [opp]);
+  const thr = useMemo(() => throwsOf(opp), [opp]);
+  const [layoutEdit, setLayoutEdit] = useState(false);
+  // «Кратко» — для взгляда между раундами: без длинных пояснений, ролики меньше
+  const [dense, setDense] = useState(() => {
+    try {
+      return localStorage.getItem('vsDense') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const toggleDense = (v: boolean) => {
+    setDense(v);
+    try {
+      localStorage.setItem('vsDense', v ? '1' : '0');
+    } catch {
+      /* не страшно */
+    }
+  };
   const name = (id: string | null) => p.chars.find((c) => c.id === id)?.displayName ?? '—';
   const counterTips = (opp?.guide?.sections ?? [])
     .filter((s) => s.tab === 'counter' && s.title.startsWith('Как играть против'))
@@ -67,7 +85,7 @@ export function VersusView(p: Props) {
     .slice(0, 4);
 
   return (
-    <div className="vs">
+    <div className={`vs${dense ? ' dense' : ''}`}>
       <div className="vs-head">
         <Side label="Ты" id={p.meId} chars={p.chars} onPick={p.setMe} avatar={p.avatar} />
         <div className="vs-mid">
@@ -78,21 +96,47 @@ export function VersusView(p: Props) {
         </div>
         <Side label="Соперник" id={p.oppId} chars={p.chars} onPick={p.setOpp} avatar={p.avatar} right />
       </div>
-      <div className={`vs-vision${p.vision.on ? ' on' : ''}${p.vision.ok ? ' ok' : ''}`}>
-        <span className="dot-live" /> {p.vision.text}
-        <span className="vs-force-hint" title="Работает и когда активна игра">
-          <kbd>Num −</kbd> узнать соперника заново
-        </span>
+      <div className="vs-bar">
+        <div className={`vs-vision${p.vision.on ? ' on' : ''}${p.vision.ok ? ' ok' : ''}`}>
+          <span className="dot-live" />
+          <span className="vs-vision-text">{p.vision.text}</span>
+          <span className="vs-force-hint" title="Работает и когда активна игра">
+            <kbd>Num −</kbd> узнать заново
+          </span>
+        </div>
+        {p.oppId && opp && !layoutEdit && (
+          <div className="seg seg-sm" role="radiogroup" title="Сколько показывать: «Кратко» — для взгляда между раундами">
+            <button role="radio" aria-checked={!dense} className={!dense ? 'on' : ''} onClick={() => toggleDense(false)}>
+              Подробно
+            </button>
+            <button role="radio" aria-checked={dense} className={dense ? 'on' : ''} onClick={() => toggleDense(true)}>
+              Кратко
+            </button>
+          </div>
+        )}
+        {p.oppId && opp && (
+          <button
+            className={`btn small${layoutEdit ? ' primary' : ' ghost'}`}
+            onClick={() => setLayoutEdit((v) => !v)}
+            title="Поменять порядок, ширину и видимость разделов на этом экране"
+          >
+            {layoutEdit ? '✓ Готово' : '⇅ Разделы'}
+          </button>
+        )}
       </div>
 
-      {!p.oppId || !opp ? (
-        <div className="empty">Выбери соперника слева в списке — или включи автоопределение в ⚙.</div>
+      {!p.oppId ? (
+        <OppPicker chars={p.chars} meId={p.meId} onPick={p.setOpp} avatar={p.avatar} />
+      ) : !opp ? (
+        <div className="empty">Загружаю {name(p.oppId)}…</div>
       ) : (
         <>
           <VsSections
+            edit={layoutEdit}
             blocks={{
               dangers: (
           <DangerList
+            dense={dense}
             opp={opp}
             me={me}
             oppCtx={oppCtx}
@@ -105,7 +149,7 @@ export function VersusView(p: Props) {
           />
               ),
               plan: counterTips.length > 0 ? (
-                <section className="card">
+                <section className="card opp">
                 <header className="card-head">
                   <h3>Общий план против {name(p.oppId)}</h3>
                 </header>
@@ -122,8 +166,14 @@ export function VersusView(p: Props) {
                 </div>
               </section>
               ) : null,
+              throws:
+                thr.groups.length + thr.positional.length > 0 ? (
+                  <CharContext.Provider value={oppCtx}>
+                    <ThrowsCard set={thr} name={name(p.oppId)} charId={opp.id} />
+                  </CharContext.Provider>
+                ) : null,
               specials: (
-                <section className="card">
+                <section className="card opp">
               <header className="card-head">
                 <h3>Его особые приёмы</h3>
               </header>
@@ -137,19 +187,20 @@ export function VersusView(p: Props) {
             </section>
               ),
               punish: punishers.length > 0 ? (
-                <section className="card">
+                <section className="card me">
                 <header className="card-head">
                   <h3>Твои наказания ({name(p.meId)})</h3>
                 </header>
                 <div className="card-body">
                   <CharContext.Provider value={meCtx}>
-                    <table className="tbl">
+                    <table className="tbl pun-tbl">
                       <tbody>
                         {punishers.map((x, i) => (
                           <tr key={i}>
-                            <td className="mono">{x.frames}f</td>
-                            <td>{x.crouch ? 'из присяда' : 'стоя'}</td>
-                            <td>
+                            <td className="pun-f">
+                              <b>{x.frames}</b>f<span className="pun-pos">{x.crouch ? 'присед' : 'стоя'}</span>
+                            </td>
+                            <td className="pun-cmd">
                               <Notation cmd={x.cmd} size="sm" />
                             </td>
                             <td className="dim">{x.why}</td>
@@ -166,6 +217,35 @@ export function VersusView(p: Props) {
         </>
       )}
     </div>
+  );
+}
+
+/** Соперник ещё не выбран — сразу показываем всех, выбрать в один клик */
+function OppPicker({ chars, meId, onPick, avatar }: { chars: CharacterInfo[]; meId: string | null; onPick: (id: string) => void; avatar: Props['avatar'] }) {
+  const [q, setQ] = useState('');
+  const list = chars.filter((c) => c.id !== meId && c.displayName.toLowerCase().includes(q.trim().toLowerCase()));
+  return (
+    <section className="opp-pick">
+      <div className="opp-pick-head">
+        <h2>Кто соперник?</h2>
+        <input
+          className="input"
+          placeholder="Поиск…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && list[0] && onPick(list[0].id)}
+        />
+      </div>
+      <p className="muted small">Или включи «Автоопределение» сверху — соперник подставится сам в начале боя.</p>
+      <div className="opp-grid">
+        {list.map((c) => (
+          <button key={c.id} className="opp-cell" onClick={() => onPick(c.id)}>
+            {avatar(c.id, 'opp-av')}
+            <span>{c.displayName}</span>
+          </button>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -212,7 +292,9 @@ type CardEdit = {
   editor?: ReactNode;
 };
 
-function DangerCard({ n, d, oppCtx, meCtx, edit }: { n: number; d: Danger; oppCtx: CharCtx; meCtx: CharCtx; edit?: CardEdit }) {
+function DangerCard({ n, d, oppCtx, meCtx, edit, dense }: { n: number; d: Danger; oppCtx: CharCtx; meCtx: CharCtx; edit?: CardEdit; dense?: boolean }) {
+  const [more, setMore] = useState(false);
+  const showGuide = !dense || more || Boolean(edit?.editor);
   return (
     <div className="danger">
       <div className="danger-n">
@@ -247,11 +329,21 @@ function DangerCard({ n, d, oppCtx, meCtx, edit }: { n: number; d: Danger; oppCt
             {d.move && <FrameStrip move={d.move} />}
           </div>
           {edit?.editor ??
-            (d.guideText && (
-              <p className="danger-guide">
-                <RichText text={d.guideText} />
-              </p>
-            ))}
+            (d.guideText &&
+              (showGuide ? (
+                <p className="danger-guide">
+                  <RichText text={d.guideText} />
+                  {dense && (
+                    <button className="link-btn" onClick={() => setMore(false)}>
+                      свернуть
+                    </button>
+                  )}
+                </p>
+              ) : (
+                <button className="link-btn danger-more" onClick={() => setMore(true)}>
+                  Пояснение из гайда
+                </button>
+              )))}
         </CharContext.Provider>
         {d.hints.length > 0 && (
           <ul className="danger-hints">
@@ -270,6 +362,189 @@ function DangerCard({ n, d, oppCtx, meCtx, edit }: { n: number; d: Danger; oppCt
         )}
       </div>
       {d.move?.video && oppCtx.charId && <VideoThumb charId={oppCtx.charId} move={d.move} />}
+    </div>
+  );
+}
+
+/** Захваты соперника: сгруппированы по кнопке слома, у каждого — ролик, если он есть */
+function ThrowsCard({ set, name, charId }: { set: ThrowSet; name: string; charId?: string }) {
+  const total = set.groups.reduce((n, g) => n + g.items.length, 0) + set.positional.length;
+  const [all, setAll] = useState(false);
+  // главные группы (то, что реально ломают в бою) — сразу; цепочки стоек и экзотика — по кнопке
+  const MAIN = new Set(['1', '2', '1+2', '1/2', 'input', 'none', 'crouch']);
+  const shown = all ? set.groups : set.groups.filter((g) => MAIN.has(g.brk));
+  const hiddenN = set.groups.filter((g) => !MAIN.has(g.brk)).reduce((n, g) => n + g.items.length, 0);
+  // крупный просмотр: все захваты с роликом подряд, листать стрелками
+  const withVideo = shown.flatMap((g) => g.items.filter((x) => x.move.video));
+  const [zoom, setZoom] = useState<number | null>(null);
+  const openZoom = (m: Move) => {
+    const i = withVideo.findIndex((x) => x.move.id === m.id);
+    if (i >= 0) setZoom(i);
+  };
+  return (
+    <section className="card opp">
+      <header className="card-head">
+        <h3>
+          Захваты {name} <span className="tab-n">{total}</span>
+        </h3>
+      </header>
+      <div className="card-body thr">
+        <p className="thr-tip">
+          Ломай кнопкой той руки, которой схватили: левая — <b>1</b>, правая — <b>2</b>, обе — <b>1+2</b>. От обычных бросков можно пригнуться.
+        </p>
+        {set.positional.length > 0 && (
+          <div className="thr-pos-row">
+            {set.positional.map((x) => (
+              <span key={x.move.id} className="thr-pos-chip" title={x.move.name ?? ''}>
+                {x.where}: <b>{x.brk === 'none' ? 'не ломается' : x.brk === '?' ? '—' : x.brk === '1/2' || x.brk === 'input' ? '1 или 2' : x.brk}</b>
+              </span>
+            ))}
+          </div>
+        )}
+        <div className="thr-groups">
+        {shown.map((g) => (
+          <div key={g.brk} className={`thr-group${g.items.length > 3 ? ' big' : ''}`}>
+            <div className="thr-group-head">
+              <span className={`thr-badge thr-${thrClass(g.brk)}`}>{BREAK_TITLE[g.brk]}</span>
+              {BREAK_NOTE[g.brk] && <span className="thr-note">{BREAK_NOTE[g.brk]}</span>}
+            </div>
+            <div className="thr-tiles">
+              {g.items.map(({ move: m }) => (
+                <div key={m.id} className="thr-tile">
+                  {m.video && charId ? (
+                    <div
+                      className="thr-thumb"
+                      title="Открыть крупно"
+                      onClickCapture={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        openZoom(m);
+                      }}
+                    >
+                      <VideoThumb charId={charId} move={m} />
+                      <span className="thr-zoom" aria-hidden>
+                        ⤢
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="thr-novid">без ролика</div>
+                  )}
+                  <div className="thr-tile-cmd">
+                    <Notation cmd={m.command} size="sm" />
+                  </div>
+                  <div className="thr-tile-meta">
+                    <span className="thr-tile-name">{m.name ?? ' '}</span>
+                    <span className="thr-tile-num">
+                      {m.damage.match(/\d+/)?.[0] ?? '—'} ур{m.startup && /\d/.test(m.startup) ? ` · i${m.startup.match(/\d+/)?.[0]}` : ''}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+        </div>
+        {zoom !== null && charId && withVideo[zoom] && (
+          <ThrowZoom
+            charId={charId}
+            item={withVideo[zoom]}
+            pos={zoom}
+            total={withVideo.length}
+            onNav={(d) => setZoom((z) => (z === null ? z : (z + d + withVideo.length) % withVideo.length))}
+            onClose={() => setZoom(null)}
+          />
+        )}
+        {hiddenN > 0 && (
+          <button className="btn small ghost thr-more" onClick={() => setAll((v) => !v)}>
+            {all ? 'Скрыть редкие' : `Ещё ${hiddenN}: из стоек и с особым сломом`}
+          </button>
+        )}
+      </div>
+    </section>
+  );
+}
+
+/** Крупный просмотр захвата: ролик почти на весь экран, замедление, листание ← → */
+function ThrowZoom({
+  charId,
+  item,
+  pos,
+  total,
+  onNav,
+  onClose,
+}: {
+  charId: string;
+  item: { move: Move; brk: ThrowBreak };
+  pos: number;
+  total: number;
+  onNav: (d: 1 | -1) => void;
+  onClose: () => void;
+}) {
+  const [speed, setSpeed] = useState(() => {
+    try {
+      return Number(localStorage.getItem('thrSpeed')) || 0.5;
+    } catch {
+      return 0.5;
+    }
+  });
+  const [el, setEl] = useState<HTMLVideoElement | null>(null);
+  useEffect(() => {
+    if (el) el.playbackRate = speed;
+    try {
+      localStorage.setItem('thrSpeed', String(speed));
+    } catch {
+      /* не страшно */
+    }
+  }, [el, speed, item]);
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+      else if (e.key === 'ArrowRight') onNav(1);
+      else if (e.key === 'ArrowLeft') onNav(-1);
+      else return;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    window.addEventListener('keydown', k, true);
+    return () => window.removeEventListener('keydown', k, true);
+  }, [onClose, onNav]);
+  const m = item.move;
+  const url = videoUrl(charId, m);
+  return (
+    <div className="thr-lightbox" onClick={onClose} role="dialog" aria-label={m.name ?? m.command}>
+      <div className="thr-lb-box" onClick={(e) => e.stopPropagation()}>
+        <div className="thr-lb-head">
+          <Notation cmd={m.command} size="md" />
+          <span className="thr-lb-name">{m.name}</span>
+          <span className={`thr-badge thr-${thrClass(item.brk)}`}>{BREAK_TITLE[item.brk]}</span>
+          <span className="thr-lb-num">
+            {m.damage.match(/\d+/)?.[0] ?? '—'} урона{m.startup && /\d/.test(m.startup) ? ` · i${m.startup.match(/\d+/)?.[0]}` : ''}
+          </span>
+          <button className="icon-btn thr-lb-x" onClick={onClose} title="Закрыть (Esc)">
+            ✕
+          </button>
+        </div>
+        {url && <video key={url} ref={setEl} className="thr-lb-video" src={url} autoPlay loop muted playsInline />}
+        <div className="thr-lb-foot">
+          <button className="btn small" onClick={() => onNav(-1)} disabled={total < 2} title="Предыдущий (←)">
+            ← Пред.
+          </button>
+          <div className="seg seg-sm" role="radiogroup" aria-label="Скорость">
+            {[1, 0.5, 0.25].map((v) => (
+              <button key={v} role="radio" aria-checked={speed === v} className={speed === v ? 'on' : ''} onClick={() => setSpeed(v)}>
+                {v === 1 ? 'Обычно' : `${v}×`}
+              </button>
+            ))}
+          </div>
+          <span className="thr-lb-pos">
+            {pos + 1} из {total}
+          </span>
+          <span className="thr-lb-hint">{BREAK_NOTE[item.brk]}</span>
+          <button className="btn small" onClick={() => onNav(1)} disabled={total < 2} title="Следующий (→)">
+            След. →
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -297,7 +572,9 @@ function DangerList({
   oppCtx,
   meCtx,
   title,
+  dense,
 }: {
+  dense?: boolean;
   opp: CharacterData;
   me: CharacterData | null;
   oppCtx: CharCtx;
@@ -454,6 +731,7 @@ function DangerList({
             onDragEnd={() => setDrag(null)}
           >
             <DangerCard
+              dense={dense}
               n={i + 1}
               d={d}
               oppCtx={oppCtx}
@@ -596,33 +874,52 @@ function ItemEditor({
 }
 
 // ---------- Разделы экрана «против»: свой порядок, скрытие, ширина ----------
-type SecId = 'dangers' | 'plan' | 'specials' | 'punish';
+type SecId = 'dangers' | 'plan' | 'throws' | 'specials' | 'punish';
 const SEC_TITLES: Record<SecId, string> = {
   dangers: 'Опасные приёмы соперника',
   plan: 'Общий план против него',
+  throws: 'Его захваты',
   specials: 'Его особые приёмы',
   punish: 'Твои наказания',
 };
-const SEC_DEFAULT: SecId[] = ['dangers', 'plan', 'specials', 'punish'];
+const SEC_DEFAULT: SecId[] = ['dangers', 'plan', 'specials', 'punish', 'throws'];
+const SEC_WIDE: SecId[] = ['dangers', 'throws'];
 type VsLayout = { order: SecId[]; hidden: SecId[]; wide: SecId[] };
 
 function loadLayout(): VsLayout {
-  const def: VsLayout = { order: SEC_DEFAULT, hidden: [], wide: ['dangers'] };
+  const def: VsLayout = { order: SEC_DEFAULT, hidden: [], wide: [...SEC_WIDE] };
   try {
     const raw = JSON.parse(localStorage.getItem('vsLayout') || 'null') as Partial<VsLayout> | null;
     if (!raw) return def;
     const ok = (x: unknown): x is SecId => SEC_DEFAULT.includes(x as SecId);
     const order = (raw.order ?? []).filter(ok);
-    for (const id of SEC_DEFAULT) if (!order.includes(id)) order.push(id); // новые разделы — в конец
-    return { order, hidden: (raw.hidden ?? []).filter(ok), wide: (raw.wide ?? def.wide).filter(ok) };
+    const wide = (raw.wide ?? def.wide).filter(ok);
+    // новые разделы — в конец; если по умолчанию они широкие, то и тут широкие
+    for (const id of SEC_DEFAULT)
+      if (!order.includes(id)) {
+        order.push(id);
+        if (SEC_WIDE.includes(id) && !wide.includes(id)) wide.push(id);
+      }
+    return { order, hidden: (raw.hidden ?? []).filter(ok), wide };
   } catch {
     return def;
   }
 }
 
-function VsSections({ blocks }: { blocks: Record<SecId, ReactNode | null> }) {
+/** Разделы подряд в половину ширины склеиваем в «поток» из двух колонок (без дыр), широкие — отдельно */
+function runs(ids: SecId[], wide: SecId[]) {
+  const out: { wide: boolean; ids: SecId[] }[] = [];
+  for (const id of ids) {
+    const w = wide.includes(id);
+    const last = out[out.length - 1];
+    if (!w && last && !last.wide) last.ids.push(id);
+    else out.push({ wide: w, ids: [id] });
+  }
+  return out;
+}
+
+function VsSections({ blocks, edit }: { blocks: Record<SecId, ReactNode | null>; edit: boolean }) {
   const [layout, setLayout] = useState<VsLayout>(loadLayout);
-  const [edit, setEdit] = useState(false);
   const [drag, setDrag] = useState<{ from: SecId; over: SecId | null; after: boolean } | null>(null);
 
   const save = (l: VsLayout) => {
@@ -653,90 +950,93 @@ function VsSections({ blocks }: { blocks: Record<SecId, ReactNode | null> }) {
 
   const visible = layout.order.filter((id) => blocks[id] != null && (edit || !layout.hidden.includes(id)));
 
+  const renderSec = (id: SecId) => {
+    const i = visible.indexOf(id);
+      const hidden = layout.hidden.includes(id);
+      const cls = [
+        'vs-sec',
+        layout.wide.includes(id) ? 'wide' : '',
+        hidden ? 'is-hidden' : '',
+        drag?.from === id ? 'dragging' : '',
+        drag?.over === id && drag.from !== id ? (drag.after ? 'drop-after' : 'drop-before') : '',
+      ]
+        .filter(Boolean)
+        .join(' ');
+      return (
+        <div
+          key={id}
+          className={cls}
+          onDragOver={(e) => {
+            if (!drag) return;
+            e.preventDefault();
+            const r = e.currentTarget.getBoundingClientRect();
+            const wide = r.width > (e.currentTarget.parentElement?.clientWidth ?? r.width) * 0.75;
+            const after = wide ? e.clientY > r.top + r.height / 2 : e.clientX > r.left + r.width / 2;
+            if (drag.over !== id || drag.after !== after) setDrag({ ...drag, over: id, after });
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            if (drag?.over) moveTo(drag.from, drag.over, drag.after);
+            setDrag(null);
+          }}
+        >
+          {edit && (
+            <div
+              className="vs-sec-bar"
+              draggable
+              onDragStart={(e) => {
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', id);
+                setDrag({ from: id, over: null, after: false });
+              }}
+              onDragEnd={() => setDrag(null)}
+            >
+              <span className="danger-grip">⠿</span>
+              <b>{SEC_TITLES[id]}</b>
+              {hidden && <span className="muted small">скрыт</span>}
+              <span className="vs-sec-tools">
+                <button className="icon-btn small" disabled={i === 0} onClick={() => shift(id, -1)} title="Выше">
+                  ↑
+                </button>
+                <button className="icon-btn small" disabled={i === visible.length - 1} onClick={() => shift(id, 1)} title="Ниже">
+                  ↓
+                </button>
+                <button className={`icon-btn small${layout.wide.includes(id) ? ' on' : ''}`} onClick={() => toggle('wide', id)} title="На всю ширину / в половину">
+                  ⇔
+                </button>
+                <button className={`icon-btn small${hidden ? ' on' : ''}`} onClick={() => toggle('hidden', id)} title={hidden ? 'Показать' : 'Скрыть'}>
+                  👁
+                </button>
+              </span>
+            </div>
+          )}
+          <div className="vs-sec-body">{blocks[id]}</div>
+        </div>
+      );
+  };
+
   return (
     <>
-      <div className="vs-layout-bar">
-        {edit ? (
-          <>
-            <span className="muted small">Перетаскивай разделы за шапку или двигай стрелками. 👁 — скрыть, ⇔ — на всю ширину или в половину.</span>
-            <button className="btn small" onClick={() => save({ order: SEC_DEFAULT, hidden: [], wide: ['dangers'] })}>
-              ↺ Как было
-            </button>
-            <button className="btn primary small" onClick={() => setEdit(false)}>
-              ✓ Готово
-            </button>
-          </>
-        ) : (
-          <button className="btn small ghost" onClick={() => setEdit(true)} title="Поменять порядок разделов на этом экране">
-            ⇅ Порядок разделов
+      {edit && (
+        <div className="vs-layout-bar">
+          <span className="muted small">Перетаскивай разделы за шапку или двигай стрелками. 👁 — скрыть, ⇔ — на всю ширину или в половину.</span>
+          <button className="btn small" onClick={() => save({ order: SEC_DEFAULT, hidden: [], wide: [...SEC_WIDE] })}>
+            ↺ Как было
           </button>
+        </div>
+      )}
+      <div className={`vs-sections${edit ? ' editing' : ''}`}>
+        {(edit ? visible.map((id) => ({ wide: true, ids: [id] })) : runs(visible, layout.wide)).map((run) =>
+          run.wide ? (
+            renderSec(run.ids[0])
+          ) : (
+            <div key={run.ids.join()} className="vs-run">
+              {run.ids.map(renderSec)}
+            </div>
+          ),
         )}
       </div>
-      <div className={`vs-sections${edit ? ' editing' : ''}`}>
-        {visible.map((id, i) => {
-          const hidden = layout.hidden.includes(id);
-          const cls = [
-            'vs-sec',
-            layout.wide.includes(id) ? 'wide' : '',
-            hidden ? 'is-hidden' : '',
-            drag?.from === id ? 'dragging' : '',
-            drag?.over === id && drag.from !== id ? (drag.after ? 'drop-after' : 'drop-before') : '',
-          ]
-            .filter(Boolean)
-            .join(' ');
-          return (
-            <div
-              key={id}
-              className={cls}
-              onDragOver={(e) => {
-                if (!drag) return;
-                e.preventDefault();
-                const r = e.currentTarget.getBoundingClientRect();
-                const wide = r.width > (e.currentTarget.parentElement?.clientWidth ?? r.width) * 0.75;
-                const after = wide ? e.clientY > r.top + r.height / 2 : e.clientX > r.left + r.width / 2;
-                if (drag.over !== id || drag.after !== after) setDrag({ ...drag, over: id, after });
-              }}
-              onDrop={(e) => {
-                e.preventDefault();
-                if (drag?.over) moveTo(drag.from, drag.over, drag.after);
-                setDrag(null);
-              }}
-            >
-              {edit && (
-                <div
-                  className="vs-sec-bar"
-                  draggable
-                  onDragStart={(e) => {
-                    e.dataTransfer.effectAllowed = 'move';
-                    e.dataTransfer.setData('text/plain', id);
-                    setDrag({ from: id, over: null, after: false });
-                  }}
-                  onDragEnd={() => setDrag(null)}
-                >
-                  <span className="danger-grip">⠿</span>
-                  <b>{SEC_TITLES[id]}</b>
-                  {hidden && <span className="muted small">скрыт</span>}
-                  <span className="vs-sec-tools">
-                    <button className="icon-btn small" disabled={i === 0} onClick={() => shift(id, -1)} title="Выше">
-                      ↑
-                    </button>
-                    <button className="icon-btn small" disabled={i === visible.length - 1} onClick={() => shift(id, 1)} title="Ниже">
-                      ↓
-                    </button>
-                    <button className={`icon-btn small${layout.wide.includes(id) ? ' on' : ''}`} onClick={() => toggle('wide', id)} title="На всю ширину / в половину">
-                      ⇔
-                    </button>
-                    <button className={`icon-btn small${hidden ? ' on' : ''}`} onClick={() => toggle('hidden', id)} title={hidden ? 'Показать' : 'Скрыть'}>
-                      👁
-                    </button>
-                  </span>
-                </div>
-              )}
-              <div className="vs-sec-body">{blocks[id]}</div>
-            </div>
-          );
-        })}
-      </div>
+
     </>
   );
 }

@@ -36,12 +36,12 @@ export function FrameStrip({ move }: { move: Move }) {
       )}
       {move.block && (
         <span className={`fs-item safety-${safety}`} title={`На блоке: ${move.block} — ${SAFETY_RU[safety]}`}>
-          Б {move.block}
+          <span className="fs-k">блок</span> {move.block}
         </span>
       )}
       {move.hit && (
         <span className="fs-item" title={`При попадании: ${move.hit}`}>
-          Х {move.hit}
+          <span className="fs-k">хит</span> {move.hit}
         </span>
       )}
     </span>

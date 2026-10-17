@@ -13,8 +13,101 @@ export type Danger = {
   guideText?: string;
   move?: Move;
   /** готовые подсказки, посчитанные по фреймам */
-  hints: { kind: 'punish' | 'safe' | 'plus' | 'duck' | 'low' | 'homing' | 'armor' | 'info'; text: string; punish?: Punisher }[];
+  hints: { kind: 'punish' | 'safe' | 'plus' | 'duck' | 'low' | 'homing' | 'armor' | 'throw' | 'info'; text: string; punish?: Punisher }[];
 };
+
+// ---------- Захваты (броски) ----------
+/** Чем ломать бросок: 1 / 2 / 1+2 / любой из 1 и 2 / смотря чем схватил / не ломается */
+export type ThrowBreak = '1' | '2' | '1+2' | '1/2' | 'input' | '3+4' | 'none' | 'crouch' | '?';
+
+export const BREAK_ORDER: ThrowBreak[] = ['1', '2', '1+2', '1/2', 'input', '3+4', 'none', 'crouch', '?'];
+
+export const BREAK_TITLE: Record<ThrowBreak, string> = {
+  '1': 'Ломай 1',
+  '2': 'Ломай 2',
+  '1+2': 'Ломай 1+2',
+  '1/2': 'Ломай 1 или 2',
+  input: '1 или 2 — смотря чем схватил',
+  '3+4': 'Ломай 3+4',
+  none: 'Не ломается',
+  crouch: 'Присед-броски',
+  '?': 'Чем ломать — не указано',
+};
+
+export const BREAK_NOTE: Record<ThrowBreak, string> = {
+  '1': 'схватил левой рукой',
+  '2': 'схватил правой рукой',
+  '1+2': 'схватил двумя руками',
+  '1/2': 'обычный бросок — сработает любая из двух',
+  input: 'смотри, какая рука пошла вперёд',
+  '3+4': 'редкий слом ногами',
+  none: 'только не попадаться: пригнуться или отойти',
+  crouch: 'хватают только присевшего, не ломаются — не сиди лишний раз',
+  '?': '',
+};
+
+const isThrowLevel = (m: Move) => /^\s*t(?!\s*\((a|g|w)\))/i.test(m.hitLevel);
+/** Это захват (бросок с ног; воздушные, с земли и у стены не считаем) */
+export const isThrowMove = isThrowLevel;
+
+/** Чем ломать бросок — по заметкам фреймдаты */
+export function throwBreak(m: Move): ThrowBreak {
+  const all = m.notes ?? '';
+  if (/^\s*t\s*\(c\)/i.test(m.hitLevel) || /crouch throw/i.test(all)) return 'crouch';
+  // только строки про слом броска: «Floor Break», «Balcony Break» и прочее мимо
+  const n = all
+    .split(/\n/)
+    .filter((l) => /throw break|break throw|throw escape|unbreakable|cannot (throw )?break|cannot be broken|^\W*\d(\+\d)? throw break/i.test(l))
+    .join('\n');
+  if (!n) return '?';
+  if (/cannot\s+(throw\s+)?break|unbreakable|cannot be broken/i.test(n)) return 'none';
+  if (/depending on|opposite/i.test(n)) return 'input';
+  if (/\b1 or 2\b/i.test(n)) return '1/2';
+  if (/3\+4 throw break|throw break 3\+4/i.test(n)) return '3+4';
+  if (/1\+2 throw break|throw break 1\+2/i.test(n)) return '1+2';
+  if (/(^|[^+\d])2 throw break|throw break 2\b/i.test(n)) return '2';
+  if (/(^|[^+\d])1 throw break|throw break 1\b/i.test(n)) return '1';
+  return '?';
+}
+
+export type ThrowInfo = { move: Move; brk: ThrowBreak };
+export type ThrowSet = {
+  /** броски с команды (начало броска; продолжения цепочек не берём) */
+  groups: { brk: ThrowBreak; items: ThrowInfo[] }[];
+  /** броски сбоку и со спины */
+  positional: { where: string; brk: ThrowBreak; move: Move }[];
+};
+
+/** Все захваты соперника, сгруппированные по тому, чем их ломать */
+export function throwsOf(opp: CharacterData | null): ThrowSet {
+  const moves = opp?.frames?.moves ?? [];
+  const groups = new Map<ThrowBreak, ThrowInfo[]>();
+  const positional: ThrowSet['positional'] = [];
+  const seen = new Set<string>();
+  for (const m of moves) {
+    if (!isThrowLevel(m) || seen.has(m.command)) continue;
+    seen.add(m.command);
+    const pos = m.command.match(/^\(?\s*(left|right|behind|back)\b[^.]*throw/i);
+    if (pos) {
+      const w = pos[1].toLowerCase();
+      const where = w === 'left' ? 'Слева' : w === 'right' ? 'Справа' : 'Сзади';
+      const brk = throwBreak(m);
+      if (!positional.some((p) => p.where === where && p.brk === brk)) positional.push({ where, brk, move: m });
+      continue;
+    }
+    if (m.command.startsWith('(')) continue; // ситуативные, вроде «(back to wall)»
+    // продолжения цепочек (у них нет своей скорости) и стойки-броски с земли — не нужны
+    if (Number.isNaN(startupNum(m.startup))) continue;
+    const brk = throwBreak(m);
+    if (!groups.has(brk)) groups.set(brk, []);
+    groups.get(brk)!.push({ move: m, brk });
+  }
+  const dmg = (m: Move) => Number(m.damage.match(/\d+/)?.[0]) || 0;
+  return {
+    groups: BREAK_ORDER.filter((b) => groups.has(b)).map((brk) => ({ brk, items: groups.get(brk)!.sort((a, b) => dmg(b.move) - dmg(a.move)) })),
+    positional: positional.sort((a, b) => a.where.localeCompare(b.where)),
+  };
+}
 
 const startupNum = (s?: string) => {
   const m = s?.match(/i?(\d+)/);
@@ -87,6 +180,13 @@ function hintsFor(move: Move | undefined, mine: Punisher[]): Danger['hints'] {
   const last = lv[lv.length - 1];
   const b = worstFrame(move.block);
   const tags = move.tags ?? {};
+  if (isThrowLevel(move)) {
+    const brk = throwBreak(move);
+    const how =
+      brk === 'none' || brk === 'crouch' ? `не ломается — ${BREAK_NOTE[brk]}` : brk === '?' ? 'чем ломать — не указано' : `${BREAK_TITLE[brk].toLowerCase()} (${BREAK_NOTE[brk]})`;
+    out.push({ kind: 'throw', text: `Захват: ${how}.` });
+    return out;
+  }
   if (first === 'l') out.push({ kind: 'low', text: 'Начинается с лоу — блок в присяде.' });
   if (lv.length > 1 && last === 'h') out.push({ kind: 'duck', text: 'Последний удар — хай: можно пригнуться, он промахнётся — наказывай из присяда.' });
   else if (lv.length === 1 && first === 'h') out.push({ kind: 'duck', text: 'Хай — можно пригнуться.' });

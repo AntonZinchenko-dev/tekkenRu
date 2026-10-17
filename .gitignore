@@ -28,3 +28,11 @@ Thumbs.db
 desktop.ini
 .vscode/
 .idea/
+
+# готовая программа и установочные архивы — слишком большие для git (GitHub не берёт файлы > 100 МБ),
+# их место — в Releases на GitHub
+TekkenRU/
+TekkenRU.part*
+TekkenRU-win-x64.zip
+*.exe
+update/

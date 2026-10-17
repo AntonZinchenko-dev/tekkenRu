@@ -47,7 +47,7 @@ export function matchCharacter(text: string, chars: CharacterInfo[]): string | n
 }
 
 /** Кадр из видео → прямоугольник игры 16:9 (на случай рамок/полос) */
-function gameRect(w: number, h: number) {
+function gameRect(w: number, h: number, bottomAlign = false) {
   const target = 16 / 9;
   if (w / h > target + 0.01) {
     const gw = h * target;
@@ -55,7 +55,8 @@ function gameRect(w: number, h: number) {
   }
   if (w / h < target - 0.01) {
     const gh = w / target;
-    return { x: 0, y: (h - gh) / 2, w, h: gh };
+    // у окна с рамкой лишнее — заголовок сверху, поэтому игру прижимаем к низу
+    return { x: 0, y: bottomAlign ? h - gh : (h - gh) / 2, w, h: gh };
   }
   return { x: 0, y: 0, w, h };
 }
@@ -83,13 +84,27 @@ export function prepare(src: CanvasImageSource, sx: number, sy: number, sw: numb
   const W = c.width;
   const H = c.height;
   const mask = new Uint8Array(W * H);
+  // Порог яркости подстраиваем под картинку: при HDR, ночном режиме или тёмной гамме буквы бывают
+  // не белыми, а серыми (~120–140), и жёсткий порог 150 их терял. Берём яркость самых светлых 2% точек.
+  const hist = new Uint32Array(256);
+  for (let i = 0; i < W * H; i++) hist[Math.min(px[i * 4], px[i * 4 + 1], px[i * 4 + 2])]++;
+  let acc = 0;
+  let p98 = 255;
+  for (let v = 255; v >= 0; v--) {
+    acc += hist[v];
+    if (acc >= W * H * 0.02) {
+      p98 = v;
+      break;
+    }
+  }
+  const thr = Math.max(95, Math.min(150, Math.round(p98 * 0.72)));
   for (let i = 0; i < W * H; i++) {
     const r = px[i * 4];
     const gg = px[i * 4 + 1];
     const b = px[i * 4 + 2];
     const mx = Math.max(r, gg, b);
     const mn = Math.min(r, gg, b);
-    mask[i] = white ? (mn > 150 && mx - mn < 70 ? 1 : 0) : mx > 150 ? 1 : 0;
+    mask[i] = white ? (mn > thr && mx - mn < 80 ? 1 : 0) : mx > thr ? 1 : 0;
   }
   // связные области: оставляем «буквы» (высокие и не слишком длинные), выкидываем линии рамки
   const lab = new Int32Array(W * H);
@@ -160,6 +175,8 @@ export function prepare(src: CanvasImageSource, sx: number, sy: number, sw: numb
     oi.data[o] = oi.data[o + 1] = oi.data[o + 2] = 0;
   }
   og.putImageData(oi, 0, 0);
+  // сколько «букв» нашли — по этому решаем, стоит ли пробовать прочитать ещё раз со сдвигом
+  (out as HTMLCanvasElement & { letters?: number }).letters = keepSet.size;
   return out;
 }
 
@@ -216,7 +233,8 @@ function fpFrom(d: Uint8ClampedArray, W: number, p: Part) {
   return s;
 }
 
-/** Отпечаток всего кадра: уменьшаем его на видеокарте до 32×18 и забираем только эти точки */
+/** Отпечаток всего кадра: уменьшаем его на видеокарте до 32×18 и забираем только эти точки.
+ *  Заодно отдаём среднюю яркость — чтобы заметить «чёрный» захват. */
 function makeTinyFp() {
   const g = document.createElement('canvas');
   g.width = 32;
@@ -231,8 +249,12 @@ function makeTinyFp() {
     cc.drawImage(g, 0, 0);
     const d = cc.getImageData(0, 0, 32, 18).data;
     let s = '';
-    for (let i = 0; i < d.length; i += 4) s += ((d[i] + d[i + 1] + d[i + 2]) / 48) | 0;
-    return s;
+    let sum = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      s += ((d[i] + d[i + 1] + d[i + 2]) / 48) | 0;
+      sum += d[i] + d[i + 1] + d[i + 2];
+    }
+    return { fp: s, mean: sum / (d.length / 4) / 3 };
   };
 }
 
@@ -268,9 +290,18 @@ async function readText(canvas: HTMLCanvasElement, whitelist: string) {
 const NAME_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ-8 ';
 const NICK_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-. ';
 
-export async function pickSource(pref: string): Promise<VisionSource | null> {
-  const list = await api.visionSources(['window', 'screen']);
-  if (pref && pref !== 'auto') return list.find((s) => s.id === pref) ?? null;
+export async function pickSource(pref: string, noWindow = false): Promise<VisionSource | null> {
+  const list = await api.visionSources(noWindow ? ['screen'] : ['window', 'screen']);
+  if (pref && pref !== 'auto' && !noWindow) {
+    const exact = list.find((s) => s.id === pref);
+    if (exact) return exact;
+    // Номер окна меняется при каждом запуске игры (window:<номер>:0), поэтому сохранённый выбор
+    // «Окно TEKKEN 8» после перезапуска игры уже не находился — и программа сдавалась совсем.
+    // Теперь берём то же по смыслу: окно игры (у нас в списке только окна Tekken) или тот же монитор.
+    const kind = pref.startsWith('window:') ? 'window' : 'screen';
+    const same = list.find((s) => s.kind === kind && (kind === 'window' || s.id.split(':')[1] === pref.split(':')[1]));
+    if (same) return same;
+  }
   return list.find((s) => s.kind === 'window') ?? list.find((s) => s.kind === 'screen' && !s.appHere) ?? list.find((s) => s.kind === 'screen') ?? null;
 }
 
@@ -294,6 +325,14 @@ const FREEZE_CHECK_MS = 5000; // как часто проверяем, не «з
 const FREEZE_LIMIT_MS = 45000; // сколько картинка должна стоять, чтобы переподключиться
 const WINDOW_CHECK_MS = 30000; // как часто ищем окно игры, если смотрим на монитор
 const CONFIRM_TRIES = 3; // сколько раз перечитать неподтверждённое имя, если плашка не меняется
+const BLACK_LIMIT_MS = 6000; // окно игры отдаёт чёрный кадр столько времени — смотрим монитор целиком
+// Запасные попытки, если имя не прочиталось: плашку чуть выше/ниже (другое разрешение, рамка окна, масштаб HUD)
+// и «любые светлые буквы» вместо «только белых» (цветной HUD, HDR). Принимаем, только если имя нашлось в списке.
+const RETRIES: { dy: number; white: boolean }[] = [
+  { dy: 0, white: false },
+  { dy: -0.3, white: true },
+  { dy: 0.3, white: true },
+];
 
 /** Запускает наблюдение. Возвращает управление: остановить / проверить заново прямо сейчас. */
 export function startVision(o: Opts): VisionHandle {
@@ -323,6 +362,8 @@ export function startVision(o: Opts): VisionHandle {
   let lastSourceCheck = Date.now();
   let forceUntil = 0; // принудительная проверка: верим первому же чтению
   let lastStatus = '';
+  let blackSince = 0; // с какого момента окно игры отдаёт чёрную картинку
+  let noWindow = false; // окно игры не годится (полноэкранный режим) — смотрим монитор
   let debugShown = false; // открыли настройки — один раз перечитаем, чтобы показать картинки
   const status = (text: string, ok: boolean) => {
     // одинаковый статус не отправляем повторно — лишние перерисовки окна ни к чему
@@ -356,7 +397,7 @@ export function startVision(o: Opts): VisionHandle {
   const acquire = async () => {
     if (stopped) return;
     try {
-      const src = await pickSource(o.sourcePref);
+      const src = await pickSource(o.sourcePref, noWindow);
       if (!src) {
         const soon = Date.now() < forceUntil;
         status(`Не нашёл ни окна игры, ни монитора для захвата. Проверю ещё раз через ${soon ? 'пару секунд' : '10 секунд'}…`, false);
@@ -394,10 +435,25 @@ export function startVision(o: Opts): VisionHandle {
     }
   };
 
-  const crop = (key: RegionKey): Rect => {
-    const g = gameRect(video.videoWidth, video.videoHeight);
+  const crop = (key: RegionKey, dy = 0): Rect => {
+    const g = gameRect(video.videoWidth, video.videoHeight, srcKind === 'window');
     const r = REGIONS[key];
-    return { sx: g.x + r.x0 * g.w, sy: g.y + r.y0 * g.h, sw: (r.x1 - r.x0) * g.w, sh: (r.y1 - r.y0) * g.h };
+    const sh = (r.y1 - r.y0) * g.h;
+    return { sx: g.x + r.x0 * g.w, sy: g.y + r.y0 * g.h + dy * sh, sw: (r.x1 - r.x0) * g.w, sh };
+  };
+  const grabRetry = makeGrabber();
+  /** Имя не прочиталось — пробуем запасные варианты, пока одно не совпадёт с персонажем из списка */
+  const retrySide = async (key: 'leftName' | 'rightName', chars: CharacterInfo[]) => {
+    for (const r of RETRIES) {
+      await idle();
+      const shot = grabRetry(video, [crop(key, r.dy)]);
+      const p = shot.parts[0];
+      const c = prepare(shot.canvas, 0, p.y, p.w, p.h, r.white);
+      const raw = await readText(c, NAME_CHARS);
+      const id = matchCharacter(raw, chars);
+      if (id) return { id, raw, canvas: c };
+    }
+    return null;
   };
 
   const reacquire = (why: string) => {
@@ -417,7 +473,17 @@ export function startVision(o: Opts): VisionHandle {
         // захват «замёрз» (бывает после Alt+Tab или смены режима окна) — подключаемся заново
         if (now - lastFreezeCheck >= FREEZE_CHECK_MS) {
           lastFreezeCheck = now;
-          const tiny = frameFp(video);
+          const { fp: tiny, mean } = frameFp(video);
+          // окно игры в полноэкранном режиме часто отдаёт только чёрный кадр — тогда смотрим монитор
+          if (srcKind === 'window' && mean < 3) {
+            if (!blackSince) blackSince = now;
+            else if (now - blackSince > BLACK_LIMIT_MS) {
+              noWindow = true;
+              blackSince = 0;
+              reacquire('Окно игры отдаёт чёрную картинку (так бывает в полноэкранном режиме) — смотрю монитор целиком. Надёжнее поставить в игре «Оконный без рамки».');
+              return;
+            }
+          } else blackSince = 0;
           if (tiny !== lastFrameFp) {
             lastFrameFp = tiny;
             stillSince = now;
@@ -427,7 +493,7 @@ export function startVision(o: Opts): VisionHandle {
           }
         }
         // смотрели на монитор, а игра запустилась позже — переключаемся на окно игры (ищем только окна — это дёшево)
-        if (srcKind === 'screen' && (!o.sourcePref || o.sourcePref === 'auto') && now - lastSourceCheck > WINDOW_CHECK_MS) {
+        if (srcKind === 'screen' && !noWindow && (!o.sourcePref || o.sourcePref === 'auto') && now - lastSourceCheck > WINDOW_CHECK_MS) {
           lastSourceCheck = now;
           const list = await api.visionSources(['window']);
           if (list.some((s) => s.kind === 'window')) {
@@ -466,8 +532,21 @@ export function startVision(o: Opts): VisionHandle {
     const rc = prepare(shot.canvas, 0, pr.y, pr.w, pr.h);
     const rightRaw = await readText(rc, NAME_CHARS);
     const chars = o.chars();
-    const left = matchCharacter(leftRaw, chars);
-    const right = matchCharacter(rightRaw, chars);
+    let left = matchCharacter(leftRaw, chars);
+    let right = matchCharacter(rightRaw, chars);
+    // одна сторона прочиталась, другая нет, или на плашке видны буквы, но имя не узнали — пробуем ещё раз
+    const lettersL = (lc as HTMLCanvasElement & { letters?: number }).letters ?? 0;
+    const lettersR = (rc as HTMLCanvasElement & { letters?: number }).letters ?? 0;
+    let lcShow = lc;
+    let rcShow = rc;
+    if (!left && (right || lettersL >= 2)) {
+      const r = await retrySide('leftName', chars);
+      if (r) (left = r.id), (lcShow = r.canvas);
+    }
+    if (!right && (left || lettersR >= 2)) {
+      const r = await retrySide('rightName', chars);
+      if (r) (right = r.id), (rcShow = r.canvas);
+    }
     let debug: VisionDebug | null = null;
     if (debugOn) {
       const thumb = document.createElement('canvas');
@@ -475,7 +554,7 @@ export function startVision(o: Opts): VisionHandle {
       thumb.height = Math.round((480 * video.videoHeight) / video.videoWidth);
       thumb.getContext('2d')!.drawImage(video, 0, 0, thumb.width, thumb.height);
       debug = {
-        crops: { 'Имя слева': lc.toDataURL(), 'Имя справа': rc.toDataURL() },
+        crops: { 'Имя слева': lcShow.toDataURL(), 'Имя справа': rcShow.toDataURL() },
         text: { 'Имя слева': leftRaw, 'Имя справа': rightRaw },
         source: `${sourceName} · ${video.videoWidth}×${video.videoHeight}`,
         frame: thumb.toDataURL('image/jpeg', 0.7),
@@ -569,9 +648,10 @@ export function startVision(o: Opts): VisionHandle {
       if (stopped) return;
       forceUntil = Date.now() + 8000;
       firedPair = '';
+      noWindow = false; // вдруг игру переключили в оконный режим — попробуем окно снова
       noFightSince = 0;
       status('Проверяю заново (Num −)…', false);
-      const best = await pickSource(o.sourcePref).catch(() => null);
+      const best = await pickSource(o.sourcePref, noWindow).catch(() => null);
       if (stream && best && best.id === srcId && Date.now() - stillSince < FREEZE_LIMIT_MS) {
         resetReads();
         if (!running) void tick();
