@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AppMeta, AppRelease, BaseUpdateResult, CharacterData, CharacterInfo, JobState, Move, Section, Settings, SourceKind, TabId, VisionSource } from '../shared/types';
+import type { AppMeta, AppRelease, BaseUpdateResult, CharacterData, CharacterInfo, JobState, Move, Section, Settings, SourceKind, TabId } from '../shared/types';
 import { APP_AUTHOR, APP_YEAR, MODELS, TAB_TITLES } from '../shared/types';
 import { api } from './api';
 import { CharContext, buildMoveIndex, type CharCtx } from './context';
 import { Empty, FrameCard, RichText, SectionCard } from './components/Content';
 import { FramesView } from './views/FramesView';
-import { VersusView, type VisionStatus } from './versus/VersusView';
+import { VersusView } from './versus/VersusView';
 import { getThumbMode, setThumbMode, type ThumbMode } from './components/MoveVideo';
-import { startVision, type VisionDebug, type VisionHandle } from './vision/vision';
 import { Legend } from './views/Legend';
 import { FlowsView } from './views/FlowsView';
 import { MyCombos } from './combo/MyCombos';
@@ -61,8 +60,8 @@ export function App() {
   const [mode, setMode] = useState<'char' | 'versus'>(ls.get('mode') === 'versus' ? 'versus' : 'char');
   const [vsMe, setVsMe] = useState<string | null>(ls.get('vsMe'));
   const [vsOpp, setVsOpp] = useState<string | null>(ls.get('vsOpp'));
-  const [vision, setVision] = useState<VisionStatus>({ on: false, text: 'Автоопределение выключено. Включи переключатель сверху — соперник будет подставляться сам.' });
-  const [visionDebug, setVisionDebug] = useState<VisionDebug | null>(null);
+  // недавние соперники — сверху в выборе соперника, чтобы выбрать в один клик
+  const [recentOpp, setRecentOpp] = useState<string[]>(() => (ls.get('recentOpp') || '').split(',').filter(Boolean));
   useEffect(() => ls.set('mode', mode), [mode]);
   useEffect(() => ls.set('vsMe', vsMe ?? ''), [vsMe]);
   useEffect(() => ls.set('vsOpp', vsOpp ?? ''), [vsOpp]);
@@ -112,72 +111,28 @@ export function App() {
     if (!vsMe && settings?.myMain) setVsMe(settings.myMain);
   }, [settings?.myMain, vsMe]);
 
-  // автоопределение соперника по экрану игры
-  const charsRef = useRef(chars);
-  charsRef.current = chars;
-  const settingsRef = useRef(settings);
-  settingsRef.current = settings;
-  const vsMeRef = useRef(vsMe);
-  vsMeRef.current = vsMe;
-  const visionRef = useRef<VisionHandle | null>(null);
-  const showSettingsRef = useRef(false);
-  showSettingsRef.current = showSettings;
-  const forcePending = useRef(false);
+  // недавние соперники: новый — в начало, без повторов, не больше 8
   useEffect(() => {
-    if (!settings?.visionEnabled || !window.tekken) {
-      setVision({ on: false, text: 'Автоопределение выключено. Включи переключатель сверху — соперник будет подставляться сам.' });
-      return;
-    }
-    setVision({ on: true, text: 'Запускаю автоопределение…' });
-    const handle = startVision({
-      sourcePref: settings.visionSource,
-      chars: () => charsRef.current,
-      myMain: () => settingsRef.current?.myMain ?? '',
-      myNick: () => settingsRef.current?.myNick ?? '',
-      onStatus: (text, ok) => {
-        console.debug('[vision]', text);
-        setVision({ on: true, text, ok });
-      },
-      onDebug: setVisionDebug,
-      wantDebug: () => showSettingsRef.current,
-      onDetect: (d) => {
-        console.debug('[vision] detect', JSON.stringify(d));
-        if (!d.left || !d.right) return;
-        let me: string;
-        let opp: string;
-        if (d.meSide === 'left') [me, opp] = [d.left, d.right];
-        else if (d.meSide === 'right') [me, opp] = [d.right, d.left];
-        else if (vsMeRef.current === d.right) [me, opp] = [d.right, d.left];
-        else [me, opp] = [d.left, d.right];
-        setVsMe(me);
-        setVsOpp(opp);
-        if (d.forced || (settingsRef.current?.autoSwitch ?? true)) setMode('versus');
-      },
+    if (!vsOpp) return;
+    setRecentOpp((list) => {
+      const next = [vsOpp, ...list.filter((x) => x !== vsOpp)].slice(0, 8);
+      ls.set('recentOpp', next.join(','));
+      return next;
     });
-    visionRef.current = handle;
-    if (forcePending.current) {
-      forcePending.current = false;
-      handle.force();
-    }
-    return () => {
-      handle.stop();
-      if (visionRef.current === handle) visionRef.current = null;
-    };
-  }, [settings?.visionEnabled, settings?.visionSource]);
+  }, [vsOpp]);
 
-  // Num − (работает и когда активна игра): проверить соперника заново прямо сейчас
+  // Num − (работает и когда активна игра): открыть выбор соперника на экране «Матчап»
   useEffect(() => {
-    const force = () => {
-      if (visionRef.current) visionRef.current.force();
-      else {
-        // автоопределение выключено — включаем и сразу проверяем
-        forcePending.current = true;
-        void saveSettingsRef.current?.({ visionEnabled: true });
-      }
+    const pickOpp = () => {
+      setMode('versus');
+      setVsOpp(null);
     };
-    const off = api.onVisionForce?.(force);
+    const off = api.onVisionForce?.(pickOpp);
     const onKey = (e: KeyboardEvent) => {
-      if (e.code === 'NumpadSubtract' && !isTyping(e.target)) force();
+      if (e.code === 'NumpadSubtract' && !isTyping(e.target)) {
+        e.preventDefault(); // иначе «−» тут же впечатается в открывшийся поиск
+        pickOpp();
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => {
@@ -339,18 +294,6 @@ export function App() {
                   </button>
                 </div>
               )}
-              {mode === 'versus' && settings && window.tekken && (
-                <button
-                  className={`auto-toggle${settings.visionEnabled ? ' on' : ''}${vision.ok ? ' ok' : ''}`}
-                  role="switch"
-                  aria-checked={settings.visionEnabled}
-                  title={settings.visionEnabled ? `${vision.text}\nНажми, чтобы выключить` : 'Программа сама узнаёт соперника по экрану игры (проверяет раз в секунду)'}
-                  onClick={() => saveSettings({ visionEnabled: !settings.visionEnabled })}
-                >
-                  <span className={`switch${settings.visionEnabled ? ' on' : ''}`} />
-                  Автоопределение
-                </button>
-              )}
               <span className="top-sep" />
               {compact && meta?.gameVersion && (
                 <span className="game-ver-badge" title="Версия игры, для которой актуальны данные. Поменять — в ⚙.">
@@ -397,11 +340,12 @@ export function App() {
                   void saveSettings({ myMain: id });
                 }}
                 setOpp={setVsOpp}
+                onClearOpp={() => setVsOpp(null)}
+                recent={recentOpp}
                 onSwap={() => {
                   setVsMe(vsOpp);
                   setVsOpp(vsMe);
                 }}
-                vision={vision}
                 showFrames={ctx.showFrames}
                 btnDigits={btnDigits}
                 avatar={(id, cls) => <Avatar key={id} id={id} remote={chars.find((c) => c.id === id)?.avatar ?? ''} className={cls} />}
@@ -419,8 +363,6 @@ export function App() {
             job={job}
             current={info}
             chars={chars}
-            vision={vision}
-            visionDebug={visionDebug}
             onSave={saveSettings}
             meta={meta}
             release={release}
@@ -619,8 +561,6 @@ function SettingsDialog({
   job,
   current,
   chars,
-  vision,
-  visionDebug,
   onSave,
   meta,
   release,
@@ -631,8 +571,6 @@ function SettingsDialog({
   job: JobState | null;
   current?: CharacterInfo;
   chars: CharacterInfo[];
-  vision: VisionStatus;
-  visionDebug: VisionDebug | null;
   onSave: (p: Partial<Settings> & { apiKey?: string }) => void;
   meta: AppMeta | null;
   release: AppRelease | null;
@@ -640,9 +578,7 @@ function SettingsDialog({
   onClose: () => void;
 }) {
   const [key, setKey] = useState('');
-  const [sources, setSources] = useState<VisionSource[]>([]);
   const [portable, setPortable] = useState<'idle' | 'busy' | 'done' | 'error'>('idle');
-  const [nick, setNick] = useState(settings.myNick);
   const [thumbMode, setThumbModeState] = useState<ThumbMode>(getThumbMode());
   const [ver, setVer] = useState(meta?.gameVersion ?? '');
   const [verSaved, setVerSaved] = useState(false);
@@ -651,9 +587,6 @@ function SettingsDialog({
   useEffect(() => {
     // старая сборка программы этих функций не знает — тогда просто молчим
     if (window.tekken && typeof api.lastBaseUpdate === 'function') api.lastBaseUpdate().then(setBu).catch(() => {});
-  }, []);
-  useEffect(() => {
-    if (window.tekken) api.visionSources().then(setSources).catch(() => setSources([]));
   }, []);
   const running = Boolean(job?.running);
   useEffect(() => {
@@ -724,28 +657,9 @@ function SettingsDialog({
           <input type="range" min={1} max={8} value={settings.concurrency} onChange={(e) => onSave({ concurrency: Number(e.target.value) })} />
         </label>
 
-        <h4>Автоопределение соперника</h4>
-        <p className="small muted">
-          Программа смотрит на окно игры так же, как Discord при показе экрана, и читает имена персонажей на плашках у полосок здоровья. В саму игру не
-          лезет и кнопки не нажимает. Как только начинается бой — сама открывает экран «Матчап».
-        </p>
-        <label className="check">
-          <input type="checkbox" checked={settings.visionEnabled} onChange={(e) => onSave({ visionEnabled: e.target.checked })} /> Включить автоопределение
-        </label>
+        <h4>Матчап</h4>
         <label className="field">
-          <span>Откуда смотреть</span>
-          <select className="input" value={settings.visionSource} onChange={(e) => onSave({ visionSource: e.target.value })}>
-            <option value="auto">Автоматически (окно TEKKEN 8, иначе монитор без этой программы)</option>
-            {sources.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.kind === 'window' ? `Окно: ${s.name}` : s.name}
-                {s.appHere ? ' — тут эта программа' : ''}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          <span>Мой основной персонаж (по нему понимаю, на какой ты стороне)</span>
+          <span>Мой основной персонаж — сразу подставляется слева на экране «Матчап»</span>
           <select className="input" value={settings.myMain} onChange={(e) => onSave({ myMain: e.target.value })}>
             <option value="">не выбран</option>
             {chars.map((c) => (
@@ -755,38 +669,9 @@ function SettingsDialog({
             ))}
           </select>
         </label>
-        <label className="field">
-          <span>Мой ник в игре (необязательно; помогает понять сторону, если играешь не мейном)</span>
-          <div className="row">
-            <input className="input" value={nick} placeholder="например, PesPerdoon" onChange={(e) => setNick(e.target.value)} />
-            <button className="btn" disabled={nick === settings.myNick} onClick={() => onSave({ myNick: nick })}>
-              Сохранить
-            </button>
-          </div>
-        </label>
-        <label className="check">
-          <input type="checkbox" checked={settings.autoSwitch} onChange={(e) => onSave({ autoSwitch: e.target.checked })} /> Сам переключаться на экран «Матчап» в начале
-          боя
-        </label>
-        <p className={`small ${vision.ok ? 'ok' : 'muted'}`}>Статус: {vision.text}</p>
-        {visionDebug && (
-          <div className="vis-debug">
-            {visionDebug.frame && (
-              <div className="vis-crop vis-frame">
-                <span className="muted small">Что видит программа: {visionDebug.source}</span>
-                <img src={visionDebug.frame} alt="" />
-              </div>
-            )}
-            {Object.entries(visionDebug.crops).map(([k, src]) => (
-              <div key={k} className="vis-crop">
-                <span className="muted small">
-                  {k}: <b>{visionDebug.text[k] || '—'}</b>
-                </span>
-                <img src={src} alt="" />
-              </div>
-            ))}
-          </div>
-        )}
+        <p className="small muted">
+          Соперника выбираешь сам: <b>Num −</b> (работает и прямо из игры) открывает выбор соперника, недавние — сверху.
+        </p>
 
         <h4>Вид</h4>
         <label className="field">
@@ -918,7 +803,7 @@ function SettingsDialog({
         )}
         {portable === 'error' && <p className="small bad">Не получилось скопировать. Проверь, что на диске есть место.</p>}
         <p className="muted small">
-          Горячие клавиши: <b>Num −</b> узнать соперника заново (работает и из игры), <b>V</b> экран «Матчап», <b>1–9</b> вкладки, <b>B</b> скрыть список персонажей, <b>Ctrl+K</b> поиск персонажа, <b>Ctrl ±</b> масштаб.
+          Горячие клавиши: <b>Num −</b> выбрать соперника (работает и из игры), <b>V</b> экран «Матчап», <b>1–9</b> вкладки, <b>B</b> скрыть список персонажей, <b>Ctrl+K</b> поиск персонажа, <b>Ctrl ±</b> масштаб.
         </p>
       </div>
     </div>

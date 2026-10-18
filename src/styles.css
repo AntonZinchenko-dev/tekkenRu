@@ -3691,3 +3691,29 @@ h3,
 .thr-lb-foot > .btn:last-child {
   margin-left: auto;
 }
+
+/* строка над матчапом: смена соперника и подсказка про Num − */
+.vs-bar-left {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.vs-bar .vs-force-hint {
+  margin-left: 0;
+  padding-left: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.opp-sub {
+  margin: 4px 0 8px;
+  font-size: 14px;
+  color: var(--muted);
+}
+.opp-recent {
+  margin-bottom: 14px;
+}
+.opp-recent .opp-cell {
+  border-color: rgba(255, 75, 92, 0.3);
+}

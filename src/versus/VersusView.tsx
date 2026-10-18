@@ -8,7 +8,6 @@ import { Notation } from '../notation/Notation';
 import { BREAK_NOTE, BREAK_TITLE, dangerFromItem, dangers, guideFor, myPunishers, specials, throwsOf, type Danger, type ThrowBreak, type ThrowSet } from './matchup';
 import { MovePicker, thrClass } from '../components/MovePicker';
 
-export type VisionStatus = { on: boolean; text: string; ok?: boolean };
 
 type Props = {
   chars: CharacterInfo[];
@@ -17,7 +16,10 @@ type Props = {
   setMe: (id: string) => void;
   setOpp: (id: string) => void;
   onSwap: () => void;
-  vision: VisionStatus;
+  /** убрать соперника — откроется выбор */
+  onClearOpp: () => void;
+  /** недавние соперники (сверху в выборе) */
+  recent: string[];
   showFrames: CharCtx['showFrames'];
   btnDigits: boolean;
   avatar: (id: string, cls?: string) => ReactNode;
@@ -97,11 +99,14 @@ export function VersusView(p: Props) {
         <Side label="Соперник" id={p.oppId} chars={p.chars} onPick={p.setOpp} avatar={p.avatar} right />
       </div>
       <div className="vs-bar">
-        <div className={`vs-vision${p.vision.on ? ' on' : ''}${p.vision.ok ? ' ok' : ''}`}>
-          <span className="dot-live" />
-          <span className="vs-vision-text">{p.vision.text}</span>
-          <span className="vs-force-hint" title="Работает и когда активна игра">
-            <kbd>Num −</kbd> узнать заново
+        <div className="vs-bar-left">
+          {p.oppId && (
+            <button className="btn small" onClick={p.onClearOpp} title="Открыть выбор соперника (Num −, работает и из игры)">
+              ⇆ Другой соперник
+            </button>
+          )}
+          <span className="vs-force-hint" title="Нажми прямо в игре — на этом экране откроется выбор соперника">
+            <kbd>Num −</kbd> выбрать соперника, даже из игры
           </span>
         </div>
         {p.oppId && opp && !layoutEdit && (
@@ -126,7 +131,7 @@ export function VersusView(p: Props) {
       </div>
 
       {!p.oppId ? (
-        <OppPicker chars={p.chars} meId={p.meId} onPick={p.setOpp} avatar={p.avatar} />
+        <OppPicker chars={p.chars} recent={p.recent} onPick={p.setOpp} avatar={p.avatar} />
       ) : !opp ? (
         <div className="empty">Загружаю {name(p.oppId)}…</div>
       ) : (
@@ -221,9 +226,11 @@ export function VersusView(p: Props) {
 }
 
 /** Соперник ещё не выбран — сразу показываем всех, выбрать в один клик */
-function OppPicker({ chars, meId, onPick, avatar }: { chars: CharacterInfo[]; meId: string | null; onPick: (id: string) => void; avatar: Props['avatar'] }) {
+function OppPicker({ chars, recent, onPick, avatar }: { chars: CharacterInfo[]; recent: string[]; onPick: (id: string) => void; avatar: Props['avatar'] }) {
   const [q, setQ] = useState('');
-  const list = chars.filter((c) => c.id !== meId && c.displayName.toLowerCase().includes(q.trim().toLowerCase()));
+  // зеркальные матчи бывают — себя из списка не убираем
+  const list = chars.filter((c) => c.displayName.toLowerCase().includes(q.trim().toLowerCase()));
+  const recentChars = q.trim() ? [] : recent.map((id) => chars.find((c) => c.id === id)).filter((c): c is CharacterInfo => Boolean(c));
   return (
     <section className="opp-pick">
       <div className="opp-pick-head">
@@ -232,11 +239,26 @@ function OppPicker({ chars, meId, onPick, avatar }: { chars: CharacterInfo[]; me
           className="input"
           placeholder="Поиск…"
           value={q}
+          autoFocus
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && list[0] && onPick(list[0].id)}
         />
       </div>
-      <p className="muted small">Или включи «Автоопределение» сверху — соперник подставится сам в начале боя.</p>
+      <p className="muted small">Начни печатать имя и нажми Enter — или кликни по аватарке. Прямо из игры это окно открывается клавишей Num −.</p>
+      {recentChars.length > 0 && (
+        <>
+          <h3 className="opp-sub">Недавние</h3>
+          <div className="opp-grid opp-recent">
+            {recentChars.map((c) => (
+              <button key={c.id} className="opp-cell" onClick={() => onPick(c.id)}>
+                {avatar(c.id, 'opp-av')}
+                <span>{c.displayName}</span>
+              </button>
+            ))}
+          </div>
+          <h3 className="opp-sub">Все</h3>
+        </>
+      )}
       <div className="opp-grid">
         {list.map((c) => (
           <button key={c.id} className="opp-cell" onClick={() => onPick(c.id)}>

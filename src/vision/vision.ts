@@ -11,7 +11,8 @@ export type VisionDebug = { crops: Record<string, string>; text: Record<string, 
 // Положение плашек в кадре 16:9 (доли ширины/высоты). Сняты с HUD Tekken 8.
 const REGIONS = {
   leftName: { x0: 0.012, y0: 0.066, x1: 0.13, y1: 0.108 },
-  rightName: { x0: 0.835, y0: 0.096, x1: 0.978, y1: 0.142 },
+  // правый край — почти до края кадра: длинные имена (YOSHIMITSU) и последняя буква не обрезаются
+  rightName: { x0: 0.835, y0: 0.096, x1: 0.992, y1: 0.142 },
   leftNick: { x0: 0.03, y0: 0.104, x1: 0.17, y1: 0.136 },
   rightNick: { x0: 0.83, y0: 0.138, x1: 0.97, y1: 0.172 },
 } as const;
@@ -328,10 +329,15 @@ const CONFIRM_TRIES = 3; // сколько раз перечитать непо�
 const BLACK_LIMIT_MS = 6000; // окно игры отдаёт чёрный кадр столько времени — смотрим монитор целиком
 // Запасные попытки, если имя не прочиталось: плашку чуть выше/ниже (другое разрешение, рамка окна, масштаб HUD)
 // и «любые светлые буквы» вместо «только белых» (цветной HUD, HDR). Принимаем, только если имя нашлось в списке.
+// Высота плашки соперника зависит от режима: в тренировке имя ниже (~11–13 % кадра),
+// в онлайне и повторах — выше (~8–10 %). Поэтому пробуем полоску на нескольких высотах (в долях высоты плашки).
 const RETRIES: { dy: number; white: boolean }[] = [
   { dy: 0, white: false },
-  { dy: -0.3, white: true },
-  { dy: 0.3, white: true },
+  { dy: -0.35, white: true },
+  { dy: -0.65, white: true },
+  { dy: 0.35, white: true },
+  { dy: -0.95, white: true },
+  { dy: 0.65, white: true },
 ];
 
 /** Запускает наблюдение. Возвращает управление: остановить / проверить заново прямо сейчас. */
@@ -668,9 +674,15 @@ export async function analyseImage(img: HTMLImageElement | HTMLCanvasElement, ch
   const res: Record<string, { text: string; id: string | null; crop: string }> = {};
   for (const key of ['leftName', 'rightName'] as const) {
     const r = REGIONS[key];
-    const c = prepare(img, g.x + r.x0 * g.w, g.y + r.y0 * g.h, (r.x1 - r.x0) * g.w, (r.y1 - r.y0) * g.h);
-    const text = await readText(c, NAME_CHARS);
-    res[key] = { text, id: matchCharacter(text, chars), crop: c.toDataURL() };
+    const sh = (r.y1 - r.y0) * g.h;
+    // те же попытки, что и в живом режиме: обычное место, потом выше/ниже
+    for (const t of [{ dy: 0, white: true }, ...RETRIES]) {
+      const c = prepare(img, g.x + r.x0 * g.w, g.y + r.y0 * g.h + t.dy * sh, (r.x1 - r.x0) * g.w, sh, t.white);
+      const text = await readText(c, NAME_CHARS);
+      const id = matchCharacter(text, chars);
+      res[key] = { text, id, crop: c.toDataURL() };
+      if (id) break;
+    }
   }
   return res;
 }
